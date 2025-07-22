@@ -1,9 +1,10 @@
-from Agents import *
+from .Agents import *
 from abc import ABC, abstractmethod
+from .utils import distribute_rewards_proportionally
 
 # Class to define neighbor relationships between agents in a DCOP
 class Neighbors():
-    def __init__(self, a1:Agent, a2:Agent,dcop_id):
+    def __init__(self, a1:Agent, a2:Agent,dcop_id, penalty_a1=None, penalty_a2=None):
 
         if a1.id_<a2.id_:
             self.a1 = a1
@@ -14,8 +15,13 @@ class Neighbors():
 
         self.dcop_id = dcop_id
         self.rnd_cost = random.Random((((dcop_id+1)+100)+((a1.id_+1)+10)+((a2.id_+1)*1))*17)
+        
+        # Store penalties for graph coloring cost model
+        self.penalty_a1 = penalty_a1 if penalty_a1 is not None else self.rnd_cost.normalvariate(50, 10)
+        self.penalty_a2 = penalty_a2 if penalty_a2 is not None else self.rnd_cost.normalvariate(50, 10)
+        
         self.cost_table = {}
-        self.create_dictionary_of_costs()  # Initialize the cost table with random costs
+        self.create_dictionary_of_costs()  # Initialize the cost table with graph coloring costs
 
     # Get the cost associated with the given variables of two agents
     def get_cost(self, a1_id, a1_variable, a2_id, a2_variable):
@@ -24,15 +30,20 @@ class Neighbors():
         return ans
 
     # Create a dictionary of costs for all possible combinations of agent variables
+    # Graph coloring cost model: cost = penalty_i + penalty_j if colors match, 0 otherwise
     def create_dictionary_of_costs(self):
         for d_a1 in self.a1.domain:
             for d_a2 in self.a2.domain:
                 first_tuple = (str(self.a1.id_),d_a1)
                 second_tuple = (str(self.a2.id_),d_a2)
                 ap = (first_tuple,second_tuple)
-                min_cost=0
-                max_cost=100
-                cost = self.rnd_cost.randint(min_cost, max_cost)
+                
+                # Graph coloring cost: penalty sum if same color, 0 if different colors
+                if d_a1 == d_a2:  # Same color (conflict)
+                    cost = self.penalty_a1 + self.penalty_a2
+                else:  # Different colors (no conflict)
+                    cost = 0
+                
                 self.cost_table[ap] = cost
 
     # Check if a given agent is part of this neighbor relationship
@@ -111,6 +122,11 @@ class DCOP(ABC):
         self.algorithm = algorithm  # Algorithm to be used
         self.dcop_name = dcop_name
         self.agents = []
+        
+        # Generate per-agent penalties for graph coloring cost model
+        self.rnd_penalties = random.Random((id_+1)*23)
+        self.agent_penalties = {}
+        
         self.create_agents()  # Initialize agents
         self.neighbors = []
         self.rnd_neighbors = random.Random((id_+5)*17)
@@ -165,18 +181,46 @@ class DCOP(ABC):
 
     # Create neighbors based on the probability k
     def create_neighbors(self):
+        # Generate penalties for all agents first
+        for i in range(1, self.A + 1):
+            self.agent_penalties[i] = self.rnd_penalties.normalvariate(50, 10)
+        
         for i in range(self.A):
             a1 = self.agents[i]
             for j in range(i+1,self.A):
                 a2 = self.agents[j]
                 rnd_number = self.rnd_neighbors.random()
                 if rnd_number<self.k:
-                    self.neighbors.append(Neighbors(a1, a2, self.dcop_id))
+                    penalty_a1 = self.agent_penalties[a1.id_]
+                    penalty_a2 = self.agent_penalties[a2.id_]
+                    self.neighbors.append(Neighbors(a1, a2, self.dcop_id, penalty_a1, penalty_a2))
 
     # Perform an iteration for all agents
     def agents_perform_iteration(self,global_clock):
         for a in self.agents:
             a.execute_iteration(global_clock)
+    
+    # Credit assignment methods for REINFORCE learning
+    def get_changers_and_gains(self):
+        """Get agents that made changes and their local gains in the last iteration"""
+        changers = []
+        local_gains = {}
+        
+        for agent in self.agents:
+            if hasattr(agent, 'get_did_flip') and hasattr(agent, 'get_local_gain'):
+                if agent.get_did_flip():
+                    changers.append(agent.id_)
+                    local_gains[agent.id_] = agent.get_local_gain()
+                    
+        return changers, local_gains
+    
+    def calculate_global_improvement(self, prev_global_cost, current_global_cost):
+        """Calculate global improvement from previous to current iteration"""
+        return prev_global_cost - current_global_cost
+    
+    def distribute_episode_rewards(self, changers, local_gains, global_improvement):
+        """Distribute rewards among changers based on their contributions"""
+        return distribute_rewards_proportionally(changers, local_gains, global_improvement)
 
     # Abstract method to create agents, to be implemented by subclasses
     @abstractmethod
@@ -206,3 +250,118 @@ class DCOP_MGM(DCOP):
     def create_agents(self):
         for i in range(self.A):
             self.agents.append(MGM_Agent(i + 1, self.D))
+
+
+# Class for DCOP using DSA with REINFORCE learning
+class DCOP_DSA_RL(DCOP):
+    def __init__(self, id_, A, D, dcop_name, algorithm, k, p0=0.5, learning_rate=0.01, 
+                 baseline_decay=0.9, episode_length=20):
+        # Initialize hyperparameters before calling parent init
+        self.p0 = p0
+        self.learning_rate = learning_rate
+        self.baseline_decay = baseline_decay
+        self.episode_length = episode_length
+        
+        # Episode tracking
+        self.current_episode = 0
+        self.iteration_in_episode = 0
+        self.episode_rewards = {}  # agent_id -> list of rewards per episode
+        
+        # Call parent initialization
+        DCOP.__init__(self, id_, A, D, dcop_name, algorithm, k)
+        
+        # Initialize episode rewards tracking for each agent
+        for agent in self.agents:
+            self.episode_rewards[agent.id_] = []
+    
+    def create_agents(self):
+        """Create DSA agents with REINFORCE learning capabilities"""
+        for i in range(self.A):
+            agent = DSA_Agent_adaptive(
+                i + 1, self.D, self.p0, self.learning_rate, self.baseline_decay
+            )
+            self.agents.append(agent)
+    
+    def execute(self):
+        """Execute DCOP with episodic REINFORCE learning"""
+        initial_global_cost = self.calc_global_cost()
+        self.global_costs.append(initial_global_cost)
+        
+        # Initialize agents
+        for a in self.agents:
+            a.initialize()
+        
+        prev_global_cost = initial_global_cost
+        
+        for i in range(incomplete_iterations):
+            self.global_clock = self.global_clock + 1
+            self.iteration_in_episode += 1
+            
+            # Check if messages exist
+            is_empty = self.mailer.place_messages_in_agents_inbox()
+            if is_empty:
+                print("DCOP:", str(self.dcop_id), "global clock:", str(self.global_clock), 
+                      "is over because there are no messages in system")
+                break
+            
+            # Perform agent iterations
+            self.agents_perform_iteration(self.global_clock)
+            
+            # Calculate current global cost
+            current_global_cost = self.calc_global_cost()
+            self.global_costs.append(current_global_cost)
+            
+            # Credit assignment: get changers and their local gains
+            changers, local_gains = self.get_changers_and_gains()
+            
+            # Calculate global improvement and distribute rewards
+            global_improvement = self.calculate_global_improvement(prev_global_cost, current_global_cost)
+            iteration_rewards = self.distribute_episode_rewards(changers, local_gains, global_improvement)
+            
+            # Store rewards for each agent (0 for non-changers)
+            for agent in self.agents:
+                agent_reward = iteration_rewards.get(agent.id_, 0)
+                if agent.id_ not in self.episode_rewards:
+                    self.episode_rewards[agent.id_] = []
+                self.episode_rewards[agent.id_].append(agent_reward)
+            
+            prev_global_cost = current_global_cost
+            
+            # Check if episode is complete
+            if self.iteration_in_episode >= self.episode_length:
+                self.finish_episode()
+                self.start_new_episode()
+        
+        # Finish final episode if not already finished
+        if self.iteration_in_episode > 0:
+            self.finish_episode()
+        
+        return self.global_costs
+    
+    def finish_episode(self):
+        """Finish current episode and update agent parameters"""
+        for agent in self.agents:
+            if hasattr(agent, 'finish_episode'):
+                agent_rewards = self.episode_rewards.get(agent.id_, [])
+                agent.finish_episode(agent_rewards)
+        
+        self.current_episode += 1
+    
+    def start_new_episode(self):
+        """Start a new episode"""
+        self.iteration_in_episode = 0
+        # Clear reward history for new episode
+        for agent_id in self.episode_rewards:
+            self.episode_rewards[agent_id] = []
+    
+    def get_learning_statistics(self):
+        """Get learning statistics for analysis"""
+        stats = {}
+        for agent in self.agents:
+            if hasattr(agent, 'theta') and hasattr(agent, 'baseline'):
+                stats[agent.id_] = {
+                    'theta': agent.theta,
+                    'probability': agent.p,
+                    'baseline': agent.baseline
+                }
+        return stats

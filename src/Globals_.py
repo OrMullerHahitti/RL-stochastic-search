@@ -17,4 +17,5 @@ class Msg():
 class Algorithm(Enum):
     DSA = 1  # DSA algorithm
     MGM = 2  # MGM algorithm
+    DSA_RL = 3  # DSA with REINFORCE learning
 

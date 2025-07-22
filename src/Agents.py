@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 import random
-from Globals_ import *
+from typing import Tuple
+
+from .Globals_ import *
+from .utils import logit_from_prob, compute_advantage, update_exponential_moving_average, sigmoid
 
 
 # Abstract base class for all agents
@@ -60,11 +63,135 @@ class Agent(ABC):
     def send_msgs(self): pass
 
 
-# Agent class for the DSA algorithm
+# Agent class for the DSA algorithm with REINFORCE learning
+class DSA_Agent_adaptive(Agent):
+    def __init__(self, id_, D, p0=0.5, learning_rate=0.01, baseline_decay=0.9):
+        super().__init__(id_, D)
+        
+        # REINFORCE parameters
+        self.theta = logit_from_prob(p0)  # Initialize logit from initial probability
+        self.p = p0  # Current probability
+        self.learning_rate = learning_rate
+        self.baseline_decay = baseline_decay
+        self.baseline = 0.0  # Exponential moving average baseline
+        
+        # Episode data collection
+        self.episode_data = []  # Store (gradient, reward) pairs during episode
+        self.previous_local_cost = 0
+        self.current_local_cost = 0
+
+    # Compute the new variable value based on messages received
+    def compute(self, msgs):
+        self.current_local_cost = self.calc_local_cost(msgs)
+        min_possible_local_cost = self.current_local_cost  # Initialize minimum cost with current local cost
+        best_local_variable = self.variable  # Initialize the best variable index with current variable index
+
+        # Loop over all possible variables - try to minimize the estimated local cost for the choice of variable
+        for variable in self.domain:
+            current_variable_costs = 0
+            for msg in msgs:
+                other_agent_id= msg.sender
+                constraint = self.constraints[other_agent_id]
+                # The keys to the constraint dictionary are built in a way that the agent with the lower ID comes
+                # first inside of it
+                if self.id_<other_agent_id:
+                    cost = constraint[((str(self.id_), variable), (str(other_agent_id), msg.information))]
+                else:
+                    cost = constraint[((str(other_agent_id), msg.information), (str(self.id_), variable))]
+                current_variable_costs += cost
+            # update min_possible_local_cost and best_local_variable in case a better local variable was found
+            if current_variable_costs < min_possible_local_cost:
+                min_possible_local_cost = current_variable_costs
+                best_local_variable = variable
+
+        # Store previous cost for local gain calculation
+        self.previous_local_cost = self.current_local_cost
+        
+        # Decision making and gradient collection for REINFORCE
+        did_flip = False
+        if min_possible_local_cost < self.current_local_cost:
+            # Update probability from current theta
+            self.p = sigmoid(self.theta)
+            
+            # Make decision to flip or not
+            if self.agent_random.random() < self.p:
+                self.variable = best_local_variable
+                did_flip = True
+                
+        # Calculate gradient of log policy
+        # ∇θ log π = (1-p) if flipped, -p if not flipped
+        if did_flip:
+            gradient = 1 - self.p
+        else:
+            gradient = -self.p
+            
+        # Store gradient and potential for reward calculation later
+        self.episode_data.append({
+            'gradient': gradient,
+            'did_flip': did_flip,
+            'previous_local_cost': self.previous_local_cost,
+            'best_local_cost': min_possible_local_cost if min_possible_local_cost < self.current_local_cost else self.current_local_cost
+        })
+
+    # Send messages to all neighbors
+    def send_msgs(self):
+        for n in self.neighbors_agents_id:
+            message = Msg(self.id_, n, self.variable)
+            self.outbox.insert([message])
+    
+    def get_local_gain(self):
+        """Calculate local gain from the last decision"""
+        if self.episode_data:
+            last_data = self.episode_data[-1]
+            return last_data['previous_local_cost'] - last_data['best_local_cost']
+        return 0
+    
+    def get_did_flip(self):
+        """Check if agent flipped in the last iteration"""
+        if self.episode_data:
+            return self.episode_data[-1]['did_flip']
+        return False
+            
+    def finish_episode(self, episode_rewards):
+        """Update theta using REINFORCE with baseline at the end of episode"""
+        if not self.episode_data:
+            return
+            
+        # Calculate total reward for this episode
+        total_reward = sum(episode_rewards)
+        
+        # Update baseline using exponential moving average
+        self.baseline = update_exponential_moving_average(
+            self.baseline, total_reward, self.baseline_decay
+        )
+        
+        # Calculate advantage
+        advantage = compute_advantage(total_reward, self.baseline)
+        
+        # Update theta using REINFORCE gradient ascent
+        # θ ← θ + α * ∇log π * advantage
+        total_gradient = sum(data['gradient'] for data in self.episode_data)
+        self.theta += self.learning_rate * total_gradient * advantage
+        
+        # Clear episode data for next episode
+        self.episode_data = []
+        
+        # Update probability for next episode
+        self.p = sigmoid(self.theta)
+    
+    def set_p(self):
+        """Update probability from current theta"""
+        self.p = sigmoid(self.theta)
+
+
+
+
+
+# Simple DSA Agent without learning (for backward compatibility)
 class DSA_Agent(Agent):
     def __init__(self, id_, D, p):
         super().__init__(id_, D)
-        self.p = p
+        self.p = p  # Fixed probability threshold
 
     # Compute the new variable value based on messages received
     def compute(self, msgs):
