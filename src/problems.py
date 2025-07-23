@@ -113,24 +113,24 @@ class Mailer():
 
 # Abstract base class for DCOP problems
 class DCOP(ABC):
-    def __init__(self,id_,A,D,dcop_name,algorithm, k, p = None, agent_mu_config=None):
+    def __init__(self,id_,A,d,dcop_name,algorithm, k, p = None, agent_mu_config=None):
         self.dcop_id = id_
         self.A = A  # Number of agents
-        self.D = D  # size of domain
+        self.d = d  # size of domain
         self.k = k  # Probability of edge creation between agents
         self.p=p  # Probability parameter for DSA
         self.algorithm = algorithm  # Algorithm to be used
         self.dcop_name = dcop_name
         self.agents = []
-        
+
         # Agent priority configuration (mu values for penalty distribution)
         self.agent_mu_config = agent_mu_config or {}
-        
+
         # Generate per-agent penalties for graph coloring cost model
         self.rnd_penalties = random.Random((id_+1)*23)
         self.agent_penalties = {}
         self.agent_mu_values = {}  # Store the mu value used for each agent
-        
+
         self.create_agents()  # Initialize agents
         self.neighbors = []
         self.rnd_neighbors = random.Random((id_+5)*17)
@@ -187,31 +187,31 @@ class DCOP(ABC):
     def generate_agent_mu_values(self):
         """Generate mu values for each agent based on configuration"""
         config = self.agent_mu_config
-        
+
         # Default: uniform mu = 50 for all agents
         default_mu = config.get('default_mu', 50)
         default_sigma = config.get('default_sigma', 10)
-        
+
         for i in range(1, self.A + 1):
             self.agent_mu_values[i] = default_mu
-        
+
         # Manual assignment: specific mu for specific agents
         if 'manual' in config:
             for agent_id, mu_value in config['manual'].items():
                 if 1 <= agent_id <= self.A:
                     self.agent_mu_values[agent_id] = mu_value
-        
+
         # Hierarchical assignment: mu based on agent ID ranges
         if 'hierarchical' in config:
             for priority_level, (start_id, end_id, mu_value) in config['hierarchical'].items():
                 for agent_id in range(start_id, min(end_id + 1, self.A + 1)):
                     self.agent_mu_values[agent_id] = mu_value
-        
+
         # Random stratified assignment
         if 'random_stratified' in config:
             agent_ids = list(range(1, self.A + 1))
             random.Random(self.dcop_id + 42).shuffle(agent_ids)  # Deterministic random
-            
+
             idx = 0
             for priority_name, (count, mu_value, mu_sigma) in config['random_stratified'].items():
                 for _ in range(min(count, len(agent_ids) - idx)):
@@ -223,11 +223,11 @@ class DCOP(ABC):
     def create_neighbors(self):
         # Generate penalties for all agents using their specific mu values
         default_sigma = self.agent_mu_config.get('default_sigma', 10)
-        
+
         for i in range(1, self.A + 1):
             mu_i = self.agent_mu_values[i]
             self.agent_penalties[i] = self.rnd_penalties.normalvariate(mu_i, default_sigma)
-        
+
         for i in range(self.A):
             a1 = self.agents[i]
             for j in range(i+1,self.A):
@@ -242,25 +242,25 @@ class DCOP(ABC):
     def agents_perform_iteration(self,global_clock):
         for a in self.agents:
             a.execute_iteration(global_clock)
-    
+
     # Credit assignment methods for REINFORCE learning
     def get_changers_and_gains(self):
         """Get agents that made changes and their local gains in the last iteration"""
         changers = []
         local_gains = {}
-        
+
         for agent in self.agents:
             if hasattr(agent, 'get_did_flip') and hasattr(agent, 'get_local_gain'):
                 if agent.get_did_flip():
                     changers.append(agent.id_)
                     local_gains[agent.id_] = agent.get_local_gain()
-                    
+
         return changers, local_gains
-    
+
     def calculate_global_improvement(self, prev_global_cost, current_global_cost):
         """Calculate global improvement from previous to current iteration"""
         return prev_global_cost - current_global_cost
-    
+
     def distribute_episode_rewards(self, changers, local_gains, global_improvement):
         """Distribute rewards among changers based on their contributions"""
         return distribute_rewards_proportionally(changers, local_gains, global_improvement)
@@ -274,45 +274,46 @@ class DCOP(ABC):
 # Class for DCOP using the DSA algorithm
 class DCOP_DSA(DCOP):
 
-    def __init__(self, id_,A,D,dcop_name,algorithm, k, p, agent_mu_config=None):
-        DCOP.__init__(self,id_,A,D,dcop_name,algorithm, k, p, agent_mu_config)
+    def __init__(self, id_,A,d,dcop_name,algorithm, k, p, agent_mu_config=None):
+        DCOP.__init__(self,id_,A,d,dcop_name,algorithm, k, p, agent_mu_config)
 
     # Create DSA agents
     def create_agents(self):
         for i in range(self.A):
-            self.agents.append(DSA_Agent(i + 1, self.D, self.p))
+            self.agents.append(DSA_Agent(i + 1, self.d, self.p))
 
 
 # Class for DCOP using the MGM algorithm
 class DCOP_MGM(DCOP):
 
-    def __init__(self, id_,A,D,dcop_name,algorithm, k, agent_mu_config=None):
-        DCOP.__init__(self,id_,A,D,dcop_name,algorithm, k, agent_mu_config=agent_mu_config)
+    def __init__(self, id_,A,d,dcop_name,algorithm, k, agent_mu_config=None):
+        DCOP.__init__(self,id_,A,d,dcop_name,algorithm, k, agent_mu_config=agent_mu_config)
 
     # Create MGM agents
     def create_agents(self):
         for i in range(self.A):
-            self.agents.append(MGM_Agent(i + 1, self.D))
+            self.agents.append(MGM_Agent(i + 1, self.d))
 
 
 # Class for DCOP using DSA with REINFORCE learning
 class DCOP_DSA_RL(DCOP):
-    def __init__(self, id_, A, D, dcop_name, algorithm, k, p0=0.5, learning_rate=0.01, 
+    def __init__(self, id_, A, d, dcop_name, algorithm, k, p0=0.7, learning_rate=0.01,
                  baseline_decay=0.9, episode_length=20, agent_mu_config=None):
+
         # Initialize hyperparameters before calling parent init
         self.p0 = p0
         self.learning_rate = learning_rate
         self.baseline_decay = baseline_decay
         self.episode_length = episode_length
         
-        # Episode tracking
+        # Call parent initialization first
+        DCOP.__init__(self, id_, A, d, dcop_name, algorithm, k, agent_mu_config=agent_mu_config)
+        
+        # Episode tracking - initialize after agents are created
         self.current_episode = 0
         self.iteration_in_episode = 0
         self.episode_rewards = {}  # agent_id -> list of rewards per episode
-        
-        # Call parent initialization
-        DCOP.__init__(self, id_, A, D, dcop_name, algorithm, k, agent_mu_config=agent_mu_config)
-        
+
         # Initialize episode rewards tracking for each agent
         for agent in self.agents:
             self.episode_rewards[agent.id_] = []
@@ -320,8 +321,8 @@ class DCOP_DSA_RL(DCOP):
     def create_agents(self):
         """Create DSA agents with REINFORCE learning capabilities"""
         for i in range(self.A):
-            agent = DSA_Agent_adaptive(
-                i + 1, self.D, self.p0, self.learning_rate, self.baseline_decay
+            agent = DsaAgentAdaptive(
+                i + 1, self.d, self.p0, self.learning_rate, self.baseline_decay
             )
             self.agents.append(agent)
     

@@ -1,45 +1,17 @@
 import math
 
 
-def sigmoid(theta):
+def sigmoid(x):
     """
-    Compute the sigmoid function for a given input theta.
+    Compute the sigmoid function.
 
     Args:
-        theta (float): Input value for which to compute the sigmoid.
+        x (float): Input value
 
     Returns:
-        float: The computed sigmoid value.
+        float: Sigmoid of x
     """
-    # Clamp theta to avoid overflow
-    theta = max(-500, min(500, theta))
-    return 1 / (1 + math.exp(-theta))
-
-def compute_probability(theta):
-    """
-    Compute the probability of changing the variable based on the sigmoid function.
-
-    Args:
-        theta (float): Input value for which to compute the probability.
-    Returns:
-        float: The computed probability value.
-    """
-    return sigmoid(theta)
-
-def logit_from_prob(p):
-    """
-    Convert probability p to logit (log-odds) space.
-    
-    Args:
-        p (float): Probability value between 0 and 1
-        
-    Returns:
-        float: Logit value (log(p/(1-p)))
-    """
-
-    p = max(1e-8, min(1-1e-8, p))  # Clamp to avoid numerical issues
-    return math.log(p / (1 - p))
-
+    return 1 / (1 + math.exp(-x))
 def compute_advantage(reward, baseline):
     """
     Compute advantage for REINFORCE with baseline.
@@ -104,3 +76,4 @@ def distribute_rewards_proportionally(changers, local_gains, global_improvement)
             rewards[agent_id] = 0
             
     return rewards
+

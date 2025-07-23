@@ -6,7 +6,7 @@ from src.Globals_ import *
 # Function to create DCOP instance based on the algorithm and parameters
 def create_selected_dcop(i,algorithm, k, p=None, **kwargs):
     A = DEFAULT_AGENTS  # Number of agents from global config
-    D = domain_size  # Domain size from global config
+    D = DEFAULT_DOMAIN_SIZE  # Domain size from global config
     
     # Extract agent priority configuration
     agent_mu_config = kwargs.get('agent_mu_config', None)
@@ -170,7 +170,7 @@ if __name__ == '__main__':
     
     print(f"Running '{SELECTED_EXPERIMENT}' experiment with {len(required_dcops)} algorithms")
     print(f"Experiment parameters: {repetitions} repetitions, {incomplete_iterations} iterations each")
-    print(f"Problem size: {DEFAULT_AGENTS} agents, {domain_size} colors")
+    print(f"Problem size: {DEFAULT_AGENTS} agents, {DEFAULT_DOMAIN_SIZE} colors")
 
     # Solve and collect results for k=0.2 (sparse graph)
     print(f"\nProcessing sparse graphs (k={DEFAULT_GRAPH_DENSITIES[0]})...")

@@ -12,7 +12,7 @@ Successfully transformed the fixed-p DSA implementation into a per-agent REINFOR
 - **Penalties**: Generated per agent using N(μ=50, σ=10) \***need to be changed that for each agent it will be a different distribution**.
 
 ### 2. REINFORCE DSA Agent with Advantage-Based Learning ✓
-- **File**: `src/Agents.py` - DSA_Agent_adaptive class
+- **File**: `src/Agents.py` - DsaAgentAdaptive class
 - **Features**:
   - Per-agent θ_i parameters with p_i = sigmoid(θ_i)
   - Episode data collection: gradients, rewards, local gains
@@ -69,7 +69,7 @@ from src.Globals_ import Algorithm
 
 # Create DSA-RL DCOP
 dcop = DCOP_DSA_RL(
-    id_=0, A=30, D=10, dcop_name='dsa_rl', 
+    id_=0, A=30, d=10, dcop_name='dsa_rl', 
     algorithm=Algorithm.DSA_RL, k=0.7,
     p0=0.5, learning_rate=0.01, baseline_decay=0.9, episode_length=20
 )

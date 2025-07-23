@@ -9,7 +9,7 @@ from src.Globals_ import *
 # Function to create DCOP instance based on the algorithm and parameters
 def create_selected_dcop(i,algorithm, k, p=None, **kwargs):
     A = DEFAULT_AGENTS  # Number of agents from global config
-    D = domain_size  # Domain size from global config
+    D = DEFAULT_DOMAIN_SIZE  # Domain size from global config
     
     # Extract agent priority configuration
     agent_mu_config = kwargs.get('agent_mu_config', None)
@@ -184,7 +184,7 @@ if __name__ == '__main__':
     
     print(f"Running '{SELECTED_EXPERIMENT}' experiment with {len(required_dcops)} algorithms")
     print(f"Experiment parameters: {repetitions} repetitions, {incomplete_iterations} iterations each")
-    print(f"Problem size: {DEFAULT_AGENTS} agents, {domain_size} colors")
+    print(f"Problem size: {DEFAULT_AGENTS} agents, {DEFAULT_DOMAIN_SIZE} colors")
 
     # Solve and collect results for k=0.2 (sparse graph)
     print(f"\nProcessing sparse graphs (k={DEFAULT_GRAPH_DENSITIES[0]})...")
@@ -192,15 +192,11 @@ if __name__ == '__main__':
     dsa_rl_dcop_k02 = None
     for dcop_config in required_dcops:
         initialized_dcops=[]
+
         for i in range(repetitions):
-            if dcop_config['algorithm'] == Algorithm.DSA:
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], dcop_config['p']))
-            elif dcop_config['algorithm'] == Algorithm.DSA_RL:
-                # Pass RL-specific parameters
-                rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], **rl_params))
-            else:
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0]))
+            # Extract all parameters except algorithm and name
+            params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
+            initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], **params))
         
         # Collect stats for DSA-RL
         if dcop_config['algorithm'] == Algorithm.DSA_RL:
@@ -220,14 +216,9 @@ if __name__ == '__main__':
     for dcop_config in required_dcops:
         initialized_dcops=[]
         for i in range(repetitions):
-            if dcop_config['algorithm'] == Algorithm.DSA:
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], dcop_config['p']))
-            elif dcop_config['algorithm'] == Algorithm.DSA_RL:
-                # Pass RL-specific parameters
-                rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], **rl_params))
-            else:
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1]))
+            # Extract all parameters except algorithm and name
+            params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
+            initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], **params))
         
         # Collect stats for DSA-RL
         if dcop_config['algorithm'] == Algorithm.DSA_RL:

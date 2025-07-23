@@ -1,21 +1,23 @@
 from abc import ABC, abstractmethod
 import random
 from typing import Tuple
+import math
 
 from .Globals_ import *
-from .utils import logit_from_prob, compute_advantage, update_exponential_moving_average, sigmoid
+from .utils import  compute_advantage, update_exponential_moving_average,sigmoid
+
 
 
 # Abstract base class for all agents
 class Agent(ABC):
 
-    def __init__(self,id_, D):
+    def __init__(self,id_, d):
         self.global_clock = 0
         self.id_ = id_
         self.agent_random = random.Random(self.id_)
-        self.variable = self.agent_random.randint(1, D)
+        self.variable = self.agent_random.randint(1, d)
         self.domain = []
-        for i in range(1,D+1):  self.domain.append(i)  # Initialize domain
+        for i in range(1,d+1):  self.domain.append(i)  # Initialize domain
         self.neighbors_agents_id = []
         self.constraints={}
         self.inbox = None
@@ -64,20 +66,19 @@ class Agent(ABC):
 
 
 # Agent class for the DSA algorithm with REINFORCE learning
-class DSA_Agent_adaptive(Agent):
-    def __init__(self, id_, D, p0=0.5, learning_rate=0.01, baseline_decay=0.9):
-        super().__init__(id_, D)
+class DsaAgentAdaptive(Agent):
+    def __init__(self, id_, d, p0=0.7, learning_rate=0.01, baseline_decay=0.9):
+        super().__init__(id_, d)
         
         # REINFORCE parameters
-        self.theta = logit_from_prob(p0)  # Initialize logit from initial probability
-        self.p = p0  # Current probability
+        self.theta = math.log(p0 / (1 - p0))  # Initialize Theta  corresponding to input probability
+        self.p = p0  # Starting probability
         self.learning_rate = learning_rate
         self.baseline_decay = baseline_decay
         self.baseline = 0.0  # Exponential moving average baseline
         
         # Episode data collection
         self.episode_data = []  # Store (gradient, reward) pairs during episode
-        self.previous_local_cost = 0
         self.current_local_cost = 0
 
     # Compute the new variable value based on messages received
@@ -104,9 +105,7 @@ class DSA_Agent_adaptive(Agent):
                 min_possible_local_cost = current_variable_costs
                 best_local_variable = variable
 
-        # Store previous cost for local gain calculation
-        self.previous_local_cost = self.current_local_cost
-        
+
         # Decision making and gradient collection for REINFORCE
         did_flip = False
         if min_possible_local_cost < self.current_local_cost:
@@ -129,8 +128,7 @@ class DSA_Agent_adaptive(Agent):
         self.episode_data.append({
             'gradient': gradient,
             'did_flip': did_flip,
-            'previous_local_cost': self.previous_local_cost,
-            'best_local_cost': min_possible_local_cost if min_possible_local_cost < self.current_local_cost else self.current_local_cost
+            'beginning_iteration_local_cost': self.current_local_cost,
         })
 
     # Send messages to all neighbors
@@ -141,9 +139,9 @@ class DSA_Agent_adaptive(Agent):
     
     def get_local_gain(self):
         """Calculate local gain from the last decision"""
-        if self.episode_data:
-            last_data = self.episode_data[-1]
-            return last_data['previous_local_cost'] - last_data['best_local_cost']
+        if len(self.episode_data)>1:
+            last_data,one_before_last = self.episode_data[-1]["beginning_iteration_local_cost"],self.episode_data[-2]["beginning_iteration_local_cost"]
+            return last_data - one_before_last
         return 0
     
     def get_did_flip(self):
@@ -189,8 +187,8 @@ class DSA_Agent_adaptive(Agent):
 
 # Simple DSA Agent without learning (for backward compatibility)
 class DSA_Agent(Agent):
-    def __init__(self, id_, D, p):
-        super().__init__(id_, D)
+    def __init__(self, id_, d, p):
+        super().__init__(id_, d)
         self.p = p  # Fixed probability threshold
 
     # Compute the new variable value based on messages received
@@ -231,8 +229,8 @@ class DSA_Agent(Agent):
 
 # Agent class for the MGM algorithm
 class MGM_Agent(Agent):
-    def __init__(self, id_, D):
-        super().__init__(id_, D)
+    def __init__(self, id_, d):
+        super().__init__(id_, d)
         self.lr = 0  # Local reduction
         self.lr_potential_variable = self.variable  # Potential variable that leads to max local reduction
 

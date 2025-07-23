@@ -4,6 +4,9 @@ import os
 # =============================================================================
 # EXPERIMENT CONFIGURATION
 # =============================================================================
+# CHANGE THIS TO SWITCH ALL EXPERIMENTS TO USE DIFFERENT PRIORITY CONFIGURATIONS
+DEFAULT_DSA_RL_VARIANT = 'uniform'  # Options: 'uniform', 'hierarchical', 'manual', 'stratified'
+
 # Basic experiment parameters with environment variable override support
 repetitions = int(os.environ.get('DSA_REPETITIONS', 30))
 incomplete_iterations = int(os.environ.get('DSA_ITERATIONS', 100))
@@ -45,7 +48,7 @@ STRATIFIED_PRIORITY_CONFIG = {
     'default_mu': 50,
     'default_sigma': 10,
     'random_stratified': {
-        'high': (5, 80, 20),    # 5 agents, μ=80, σ=5
+        'high': (5, 80, 20),    # 5 agents, μ=80, σ=20
         'medium': (15, 50, 20), # 15 agents, μ=50, σ=5
         'low': (10, 20, 5)     # 10 agents, μ=20, σ=5
     }
@@ -67,15 +70,21 @@ class Algorithm(Enum):
 # =============================================================================
 # ALGORITHM CONFIGURATIONS
 # =============================================================================
-# DSA configurations
-DSA_CONFIGS = [
-    {'algorithm': Algorithm.DSA, 'p': 0.2, 'name': 'DSA_p02'},
-    {'algorithm': Algorithm.DSA, 'p': 0.7, 'name': 'DSA_p07'},
-    {'algorithm': Algorithm.DSA, 'p': 1.0, 'name': 'DSA_p10'}
-]
+# Function to create DSA configs with specified priority configuration
+def create_dsa_configs(agent_mu_config):
+    return [
+        {'algorithm': Algorithm.DSA, 'p': 0.2, 'name': 'DSA_p02', 'agent_mu_config': agent_mu_config},
+        {'algorithm': Algorithm.DSA, 'p': 0.7, 'name': 'DSA_p07', 'agent_mu_config': agent_mu_config},
+        {'algorithm': Algorithm.DSA, 'p': 1.0, 'name': 'DSA_p10', 'agent_mu_config': agent_mu_config}
+    ]
 
-# MGM configuration
-MGM_CONFIG = {'algorithm': Algorithm.MGM, 'name': 'MGM'}
+# Function to create MGM config with specified priority configuration
+def create_mgm_config(agent_mu_config):
+    return {'algorithm': Algorithm.MGM, 'name': 'MGM', 'agent_mu_config': agent_mu_config}
+
+# Default DSA and MGM configurations (for backward compatibility)
+DSA_CONFIGS = create_dsa_configs(HIERARCHICAL_PRIORITY_CONFIG)
+MGM_CONFIG = create_mgm_config(HIERARCHICAL_PRIORITY_CONFIG)
 
 # DSA-RL configurations with different priority settings
 DSA_RL_CONFIGS = {
@@ -84,7 +93,7 @@ DSA_RL_CONFIGS = {
         'p0': 0.5,
         'learning_rate': 0.01,
         'baseline_decay': 0.9,
-        'episode_length': 20,
+        'episode_length': 70,
         'agent_mu_config': DEFAULT_PRIORITY_CONFIG,
         'name': 'DSA_RL_Uniform'
     },
@@ -93,7 +102,7 @@ DSA_RL_CONFIGS = {
         'p0': 0.5,
         'learning_rate': 0.01,
         'baseline_decay': 0.9,
-        'episode_length': 20,
+        'episode_length': 100,
         'agent_mu_config': HIERARCHICAL_PRIORITY_CONFIG,
         'name': 'DSA_RL_Hierarchical'
     },
@@ -102,7 +111,7 @@ DSA_RL_CONFIGS = {
         'p0': 0.5,
         'learning_rate': 0.01,
         'baseline_decay': 0.9,
-        'episode_length': 20,
+        'episode_length': 70,
         'agent_mu_config': MANUAL_PRIORITY_CONFIG,
         'name': 'DSA_RL_Manual'
     },
@@ -111,7 +120,7 @@ DSA_RL_CONFIGS = {
         'p0': 0.5,
         'learning_rate': 0.01,
         'baseline_decay': 0.9,
-        'episode_length': 20,
+        'episode_length': 150,
         'agent_mu_config': STRATIFIED_PRIORITY_CONFIG,
         'name': 'DSA_RL_Stratified'
     }
@@ -120,10 +129,26 @@ DSA_RL_CONFIGS = {
 # =============================================================================
 # EXPERIMENT SCENARIOS
 # =============================================================================
-# Standard comparison experiment
-STANDARD_EXPERIMENT = DSA_CONFIGS + [MGM_CONFIG, DSA_RL_CONFIGS['hierarchical']]
+# Function to create standard experiment with consistent priority config
+def create_standard_experiment(dsa_rl_variant='hierarchical'):
+    """Create standard experiment where all algorithms use the same priority config as the DSA_RL variant"""
+    dsa_rl_config = DSA_RL_CONFIGS[dsa_rl_variant]
+    priority_config = dsa_rl_config['agent_mu_config']
+    
+    return create_dsa_configs(priority_config) + [create_mgm_config(priority_config), dsa_rl_config]
 
-# Priority comparison experiment
+# Function to create full experiment with consistent priority config  
+def create_full_experiment(dsa_rl_variant='hierarchical'):
+    """Create full experiment where all algorithms use the same priority config as the DSA_RL variant"""
+    dsa_rl_config = DSA_RL_CONFIGS[dsa_rl_variant]
+    priority_config = dsa_rl_config['agent_mu_config']
+    
+    return create_dsa_configs(priority_config) + [create_mgm_config(priority_config)] + list(DSA_RL_CONFIGS.values())
+
+# Default experiment configurations (use global setting)
+STANDARD_EXPERIMENT = create_standard_experiment(DEFAULT_DSA_RL_VARIANT)
+
+# Priority comparison experiment (DSA-RL variants only)
 PRIORITY_COMPARISON_EXPERIMENT = [
     DSA_RL_CONFIGS['uniform'],
     DSA_RL_CONFIGS['hierarchical'], 
@@ -131,9 +156,17 @@ PRIORITY_COMPARISON_EXPERIMENT = [
     DSA_RL_CONFIGS['stratified']
 ]
 
-# Full comparison experiment
-FULL_EXPERIMENT = DSA_CONFIGS + [MGM_CONFIG] + list(DSA_RL_CONFIGS.values())
+# Full comparison experiment (uses global setting)
+FULL_EXPERIMENT = create_full_experiment(DEFAULT_DSA_RL_VARIANT)
 
-# Minimal experiment for testing (faster execution)
-MINIMAL_EXPERIMENT = [DSA_CONFIGS[1], MGM_CONFIG, DSA_RL_CONFIGS['hierarchical']]
+# Function to create minimal experiment with consistent priority config
+def create_minimal_experiment(dsa_rl_variant='hierarchical'):
+    """Create minimal experiment with one DSA, MGM, and DSA_RL using same priority config"""
+    dsa_rl_config = DSA_RL_CONFIGS[dsa_rl_variant]
+    priority_config = dsa_rl_config['agent_mu_config']
+    
+    return [create_dsa_configs(priority_config)[1], create_mgm_config(priority_config), dsa_rl_config]
+
+# Minimal experiment for testing (uses global setting)
+MINIMAL_EXPERIMENT = create_minimal_experiment(DEFAULT_DSA_RL_VARIANT)
 
