@@ -36,6 +36,7 @@ def logit_from_prob(p):
     Returns:
         float: Logit value (log(p/(1-p)))
     """
+
     p = max(1e-8, min(1-1e-8, p))  # Clamp to avoid numerical issues
     return math.log(p / (1 - p))
 
