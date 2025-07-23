@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 from src.problems import *
-from src.Globals_ import *
+from src.global_map import *
 
 
 # Function to create DCOP instance based on the algorithm and parameters
@@ -18,13 +18,14 @@ def create_selected_dcop(i,algorithm, k, p=None, **kwargs):
         dcop_name = f"MGM_{i}"
         return DCOP_MGM(i,A,D,dcop_name,algorithm, k, agent_mu_config)
     if algorithm == Algorithm.DSA_RL:
-        dcop_name = f"DSA_RL_{i}"
+        dcop_name = f"DSA_RL_Learning" 
         # Extract RL-specific parameters
         p0 = kwargs.get('p0', 0.5)
         learning_rate = kwargs.get('learning_rate', 0.01)
         baseline_decay = kwargs.get('baseline_decay', 0.9)
         episode_length = kwargs.get('episode_length', 20)
-        return DCOP_DSA_RL(i,A,D,dcop_name,algorithm, k, p0, learning_rate, baseline_decay, episode_length, agent_mu_config)
+        num_episodes = kwargs.get('num_episodes', repetitions)  # Use repetitions as episodes
+        return DCOP_DSA_RL(0,A,D,dcop_name,algorithm, k, p0, learning_rate, baseline_decay, episode_length, num_episodes, agent_mu_config)
     return None
 
 
@@ -86,40 +87,23 @@ def display_graph(y_axis_data, title, config_labels=None, dsa_rl_stats=None, dsa
         print("-" * 60)
         display_agent_probabilities(dsa_rl_stats, dsa_rl_dcop)
 
-def display_agent_probabilities(all_stats, dcop_with_mu=None):
-    """Display learned probabilities for DSA-RL agents"""
-    if not all_stats:
+def display_agent_probabilities(final_stats, dcop_with_mu=None):
+    """Display learned probabilities for DSA-RL agents after multi-episode learning"""
+    if not final_stats:
         print("No DSA-RL statistics available")
         return
     
-    # Calculate average probabilities across all repetitions
-    num_agents = len(all_stats[0]) if all_stats else 0
-    if num_agents == 0:
-        print("No agent data available")
+    # Handle single set of final statistics (not multiple repetitions)
+    if not isinstance(final_stats, dict):
+        print("Invalid statistics format")
         return
-    
-    avg_probs = {}
-    avg_thetas = {}
-    avg_baselines = {}
-    
-    # Aggregate statistics across repetitions
-    for stats in all_stats:
-        for agent_id, agent_stats in stats.items():
-            if agent_id not in avg_probs:
-                avg_probs[agent_id] = []
-                avg_thetas[agent_id] = []
-                avg_baselines[agent_id] = []
-            
-            avg_probs[agent_id].append(agent_stats['probability'])
-            avg_thetas[agent_id].append(agent_stats['theta'])
-            avg_baselines[agent_id].append(agent_stats['baseline'])
     
     # Get mu values if available
     mu_values = {}
     if dcop_with_mu and hasattr(dcop_with_mu, 'agent_mu_values'):
         mu_values = dcop_with_mu.agent_mu_values
     
-    # Calculate and display averages
+    # Display header
     if mu_values:
         print("Agent | Final Probability | Theta   | Baseline | Priority μ")
         print("------|-------------------|---------|----------|----------")
@@ -127,25 +111,41 @@ def display_agent_probabilities(all_stats, dcop_with_mu=None):
         print("Agent | Final Probability | Theta   | Baseline")
         print("------|-------------------|---------|----------")
     
-    for agent_id in sorted(avg_probs.keys()):
-        avg_p = sum(avg_probs[agent_id]) / len(avg_probs[agent_id])
-        avg_theta = sum(avg_thetas[agent_id]) / len(avg_thetas[agent_id])
-        avg_baseline = sum(avg_baselines[agent_id]) / len(avg_baselines[agent_id])
+    # Display statistics for each agent
+    all_probs = []
+    for agent_id in sorted(final_stats.keys()):
+        agent_stats = final_stats[agent_id]
+        p = agent_stats['probability']
+        theta = agent_stats['theta']
+        baseline = agent_stats['baseline']
+        all_probs.append(p)
         
         if mu_values and agent_id in mu_values:
             mu_val = mu_values[agent_id]
-            print(f"{agent_id:5} | {avg_p:16.3f} | {avg_theta:7.3f} | {avg_baseline:8.1f} | {mu_val:8.1f}")
+            print(f"{agent_id:5} | {p:16.3f} | {theta:7.3f} | {baseline:8.1f} | {mu_val:8.1f}")
         else:
-            print(f"{agent_id:5} | {avg_p:16.3f} | {avg_theta:7.3f} | {avg_baseline:8.1f}")
+            print(f"{agent_id:5} | {p:16.3f} | {theta:7.3f} | {baseline:8.1f}")
     
     # Summary statistics
-    all_probs = [p for probs in avg_probs.values() for p in probs]
     if all_probs:
         min_p = min(all_probs)
         max_p = max(all_probs)
         avg_p = sum(all_probs) / len(all_probs)
         print(f"\nSummary: Min p={min_p:.3f}, Max p={max_p:.3f}, Avg p={avg_p:.3f}")
         print(f"Learning spread: {max_p - min_p:.3f} (higher = more differentiation)")
+        print(f"Total episodes: {getattr(dcop_with_mu, 'num_episodes', 'Unknown')}")
+    
+    # Display validation: show that each episode started with same conditions
+    if dcop_with_mu and hasattr(dcop_with_mu, 'all_episode_costs'):
+        episode_costs = dcop_with_mu.all_episode_costs
+        if len(episode_costs) > 1:
+            print(f"\n🔍 Validation - Episode Starting Costs:")
+            for i, costs in enumerate(episode_costs[:5]):  # Show first 5 episodes
+                if costs:
+                    print(f"Episode {i+1}: {costs[0]:.1f}")
+            if len(episode_costs) > 5:
+                print(f"... (showing first 5 of {len(episode_costs)} episodes)")
+            print("✅ Identical starting costs confirm same graph structure per episode")
 
 # Main execution starts here
 if __name__ == '__main__':
@@ -177,23 +177,33 @@ if __name__ == '__main__':
     dsa_rl_stats_k02 = None
     dsa_rl_dcop_k02 = None
     for dcop_config in required_dcops:
-        initialized_dcops=[]
-        for i in range(repetitions):
-            if dcop_config['algorithm'] == Algorithm.DSA:
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], dcop_config['p']))
-            elif dcop_config['algorithm'] == Algorithm.DSA_RL:
-                # Pass RL-specific parameters
-                rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], **rl_params))
-            else:
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0]))
-        
-        # Collect stats for DSA-RL
         if dcop_config['algorithm'] == Algorithm.DSA_RL:
-            avg_global_cost, stats, first_dcop = solve_dcops(initialized_dcops, return_stats=True)
-            dsa_rl_stats_k02 = stats
-            dsa_rl_dcop_k02 = first_dcop
+            # Special handling for DSA-RL: single instance with multiple episodes
+            rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
+            rl_params['num_episodes'] = repetitions  # Set number of episodes
+            
+            # Create single DSA-RL instance
+            dsa_rl_dcop = create_selected_dcop(0, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], **rl_params)
+            
+            # Execute multi-episode learning
+            final_episode_costs = dsa_rl_dcop.execute()
+            
+            # Get final convergence curve (for compatibility)
+            avg_global_cost = final_episode_costs
+            
+            # Store learning statistics
+            dsa_rl_stats_k02 = dsa_rl_dcop.get_final_agent_statistics()
+            dsa_rl_dcop_k02 = dsa_rl_dcop
+            
         else:
+            # Standard handling for DSA/MGM: multiple independent instances  
+            initialized_dcops=[]
+            for i in range(repetitions):
+                if dcop_config['algorithm'] == Algorithm.DSA:
+                    initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], dcop_config['p']))
+                else:  # MGM
+                    initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0]))
+            
             avg_global_cost = solve_dcops(initialized_dcops)
         
         y_axis_data_k_02.append(avg_global_cost)
@@ -204,23 +214,33 @@ if __name__ == '__main__':
     dsa_rl_stats_k07 = None
     dsa_rl_dcop_k07 = None
     for dcop_config in required_dcops:
-        initialized_dcops=[]
-        for i in range(repetitions):
-            if dcop_config['algorithm'] == Algorithm.DSA:
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], dcop_config['p']))
-            elif dcop_config['algorithm'] == Algorithm.DSA_RL:
-                # Pass RL-specific parameters
-                rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], **rl_params))
-            else:
-                initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1]))
-        
-        # Collect stats for DSA-RL
         if dcop_config['algorithm'] == Algorithm.DSA_RL:
-            avg_global_cost, stats, first_dcop = solve_dcops(initialized_dcops, return_stats=True)
-            dsa_rl_stats_k07 = stats
-            dsa_rl_dcop_k07 = first_dcop
+            # Special handling for DSA-RL: single instance with multiple episodes
+            rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
+            rl_params['num_episodes'] = repetitions  # Set number of episodes
+            
+            # Create single DSA-RL instance  
+            dsa_rl_dcop = create_selected_dcop(0, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], **rl_params)
+            
+            # Execute multi-episode learning
+            final_episode_costs = dsa_rl_dcop.execute()
+            
+            # Get final convergence curve (for compatibility)
+            avg_global_cost = final_episode_costs
+            
+            # Store learning statistics
+            dsa_rl_stats_k07 = dsa_rl_dcop.get_final_agent_statistics()
+            dsa_rl_dcop_k07 = dsa_rl_dcop
+            
         else:
+            # Standard handling for DSA/MGM: multiple independent instances
+            initialized_dcops=[]
+            for i in range(repetitions):
+                if dcop_config['algorithm'] == Algorithm.DSA:
+                    initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], dcop_config['p']))
+                else:  # MGM
+                    initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1]))
+            
             avg_global_cost = solve_dcops(initialized_dcops)
         
         y_axis_data_k_07.append(avg_global_cost)

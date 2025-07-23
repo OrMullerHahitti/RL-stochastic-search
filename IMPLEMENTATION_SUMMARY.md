@@ -63,15 +63,16 @@ Successfully transformed the fixed-p DSA implementation into a per-agent REINFOR
 - ✓ All components integrated successfully
 
 ## Usage Example
+
 ```python
 from src.problems import DCOP_DSA_RL
-from src.Globals_ import Algorithm
+from src.global_map import Algorithm
 
 # Create DSA-RL DCOP
 dcop = DCOP_DSA_RL(
-    id_=0, A=30, d=10, dcop_name='dsa_rl', 
-    algorithm=Algorithm.DSA_RL, k=0.7,
-    p0=0.5, learning_rate=0.01, baseline_decay=0.9, episode_length=20
+  id_=0, A=30, d=10, dcop_name='dsa_rl',
+  algorithm=Algorithm.DSA_RL, k=0.7,
+  p0=0.5, learning_rate=0.01, baseline_decay=0.9, episode_length=20
 )
 
 # Execute and get costs

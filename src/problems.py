@@ -1,4 +1,4 @@
-from .Agents import *
+from .agents import *
 from abc import ABC, abstractmethod
 from .utils import distribute_rewards_proportionally
 
@@ -87,11 +87,11 @@ class Mailer():
     def __init__(self,agents):
         self.inbox = UnboundedBuffer()
         self.agents_outbox = {}
-        for a in agents:
+        for agent in agents:
             outbox = UnboundedBuffer()
-            self.agents_outbox[a.id_] = outbox
-            a.inbox = outbox
-            a.outbox = self.inbox
+            self.agents_outbox[agent.id_] = outbox
+            agent.inbox = outbox
+            agent.outbox = self.inbox
 
     # Place messages in the agents' inboxes
     def place_messages_in_agents_inbox(self):
@@ -143,9 +143,9 @@ class DCOP(ABC):
 
     # Connect each agent to its neighbors
     def connect_agents_to_neighbors(self):
-        for a in self.agents:
-            neighbors_of_a = self.get_all_neighbors_obj_of_agent(a)
-            a.set_neighbors(neighbors_of_a)
+        for agent in self.agents:
+            neighbors_of_a = self.get_all_neighbors_obj_of_agent(agent)
+            agent.set_neighbors(neighbors_of_a)
 
     # Get all neighbor objects for a given agent
     def get_all_neighbors_obj_of_agent(self, agent:Agent):
@@ -169,8 +169,8 @@ class DCOP(ABC):
         initial_global_cost =self.calc_global_cost()
         self.global_costs.append(initial_global_cost)
 
-        for a in self.agents:
-            a.initialize()
+        for agent in self.agents:
+            agent.initialize()
 
         for i in range(incomplete_iterations):
             self.global_clock = self.global_clock + 1
@@ -240,8 +240,8 @@ class DCOP(ABC):
 
     # Perform an iteration for all agents
     def agents_perform_iteration(self,global_clock):
-        for a in self.agents:
-            a.execute_iteration(global_clock)
+        for agent in self.agents:
+            agent.execute_iteration(global_clock)
 
     # Credit assignment methods for REINFORCE learning
     def get_changers_and_gains(self):
@@ -298,21 +298,26 @@ class DCOP_MGM(DCOP):
 # Class for DCOP using DSA with REINFORCE learning
 class DCOP_DSA_RL(DCOP):
     def __init__(self, id_, A, d, dcop_name, algorithm, k, p0=0.7, learning_rate=0.01,
-                 baseline_decay=0.9, episode_length=20, agent_mu_config=None):
+                 baseline_decay=0.9, episode_length=20, num_episodes=1, agent_mu_config=None):
 
         # Initialize hyperparameters before calling parent init
         self.p0 = p0
         self.learning_rate = learning_rate
         self.baseline_decay = baseline_decay
         self.episode_length = episode_length
+        self.num_episodes = num_episodes  # Number of learning episodes to run
         
         # Call parent initialization first
         DCOP.__init__(self, id_, A, d, dcop_name, algorithm, k, agent_mu_config=agent_mu_config)
         
-        # Episode tracking - initialize after agents are created
+        # Multi-episode tracking
+        self.all_episode_costs = []  # List of cost curves, one per episode
+        self.episode_statistics = []  # Learning statistics per episode
+        
+        # Current episode state
         self.current_episode = 0
         self.iteration_in_episode = 0
-        self.episode_rewards = {}  # agent_id -> list of rewards per episode
+        self.episode_rewards = {}  # agent_id -> list of rewards per current episode
 
         # Initialize episode rewards tracking for each agent
         for agent in self.agents:
@@ -327,33 +332,89 @@ class DCOP_DSA_RL(DCOP):
             self.agents.append(agent)
     
     def execute(self):
-        """Execute DCOP with episodic REINFORCE learning"""
-        initial_global_cost = self.calc_global_cost()
-        self.global_costs.append(initial_global_cost)
+        """Execute multiple episodes of DCOP with persistent REINFORCE learning"""
         
-        # Initialize agents
-        for a in self.agents:
-            a.initialize()
+        # Run multiple learning episodes with the same agents
+        for episode_num in range(self.num_episodes):
+            print(f"DSA-RL Episode {episode_num + 1}/{self.num_episodes}")
+
+            episode_costs = self.run_single_episode(episode_num)
+            
+            # Store episode results
+            self.all_episode_costs.append(episode_costs)
+            
+            # Update agent parameters based on episode performance
+            self.update_agent_parameters_after_episode()
+            
+            # Collect learning statistics
+            episode_stats = self.get_learning_statistics()
+            self.episode_statistics.append(episode_stats)
+            self.prepare_agents_for_next_episode()
+        
+        # Return the costs from the final episode for compatibility
+        return self.all_episode_costs[-1] if self.all_episode_costs else []
+    
+    def prepare_agents_for_next_episode(self):
+        """Reset agents for the next episode while keeping the graph structure intact."""
+        # Regenerate penalties for existing neighbors
+        for neighbor in self.neighbors:
+            # Randomize penalties using the same deterministic random generator
+            neighbor.penalty_a1 = self.rnd_penalties.normalvariate(
+                self.agent_mu_values[neighbor.a1.id_],
+                self.agent_mu_config.get('default_sigma', 10)
+            )
+            neighbor.penalty_a2 = self.rnd_penalties.normalvariate(
+                self.agent_mu_values[neighbor.a2.id_],
+                self.agent_mu_config.get('default_sigma', 10)
+            )
+            # Recreate the cost table with new penalties
+            neighbor.create_dictionary_of_costs()
+
+        # Reset agent variables to a random value within their domain
+        for agent in self.agents:
+            agent.variable = agent.agent_random.choice(agent.domain)
+
+        # Reset episode tracking
+        self.current_episode += 1
+        self.iteration_in_episode = 0
+        self.episode_rewards = {agent.id_: [] for agent in self.agents}
+        self.generate_agent_mu_values()
+        # Reset global clock for this episode
+        self.global_clock = 0
+    
+
+    
+    def run_single_episode(self, episode_num):
+        """Run a single episode of the DCOP algorithm"""
+        episode_costs = []
+        
+        # Calculate initial cost for this episode
+        initial_global_cost = self.calc_global_cost()
+        episode_costs.append(initial_global_cost)
+        
+        # Initialize agents (send initial messages)
+        for agent in self.agents:
+            agent.initialize()
         
         prev_global_cost = initial_global_cost
         
-        for i in range(incomplete_iterations):
-            self.global_clock = self.global_clock + 1
+        # Run for episode_length iterations
+        for i in range(self.episode_length):
+            self.global_clock += 1
             self.iteration_in_episode += 1
             
             # Check if messages exist
             is_empty = self.mailer.place_messages_in_agents_inbox()
             if is_empty:
-                print("DCOP:", str(self.dcop_id), "global clock:", str(self.global_clock), 
-                      "is over because there are no messages in system")
+                print(f"Episode {episode_num + 1} ended early at iteration {i + 1} (no messages)")
                 break
             
-            # Perform agent iterations
+            # Perform agent iterations  
             self.agents_perform_iteration(self.global_clock)
             
             # Calculate current global cost
             current_global_cost = self.calc_global_cost()
-            self.global_costs.append(current_global_cost)
+            episode_costs.append(current_global_cost)
             
             # Credit assignment: get changers and their local gains
             changers, local_gains = self.get_changers_and_gains()
@@ -365,41 +426,21 @@ class DCOP_DSA_RL(DCOP):
             # Store rewards for each agent (0 for non-changers)
             for agent in self.agents:
                 agent_reward = iteration_rewards.get(agent.id_, 0)
-                if agent.id_ not in self.episode_rewards:
-                    self.episode_rewards[agent.id_] = []
                 self.episode_rewards[agent.id_].append(agent_reward)
             
             prev_global_cost = current_global_cost
-            
-            # Check if episode is complete
-            if self.iteration_in_episode >= self.episode_length:
-                self.finish_episode()
-                self.start_new_episode()
         
-        # Finish final episode if not already finished
-        if self.iteration_in_episode > 0:
-            self.finish_episode()
-        
-        return self.global_costs
+        return episode_costs
     
-    def finish_episode(self):
-        """Finish current episode and update agent parameters"""
+    def update_agent_parameters_after_episode(self):
+        """Update agent theta parameters after episode completion"""
         for agent in self.agents:
             if hasattr(agent, 'finish_episode'):
                 agent_rewards = self.episode_rewards.get(agent.id_, [])
                 agent.finish_episode(agent_rewards)
-        
-        self.current_episode += 1
-    
-    def start_new_episode(self):
-        """Start a new episode"""
-        self.iteration_in_episode = 0
-        # Clear reward history for new episode
-        for agent_id in self.episode_rewards:
-            self.episode_rewards[agent_id] = []
     
     def get_learning_statistics(self):
-        """Get learning statistics for analysis"""
+        """Get current learning statistics for all agents"""
         stats = {}
         for agent in self.agents:
             if hasattr(agent, 'theta') and hasattr(agent, 'baseline'):
@@ -409,3 +450,16 @@ class DCOP_DSA_RL(DCOP):
                     'baseline': agent.baseline
                 }
         return stats
+    
+    def get_all_episode_costs(self):
+        """Get cost curves for all episodes"""
+        return self.all_episode_costs
+    
+    def get_episode_statistics(self):
+        """Get learning statistics progression across all episodes"""
+        return self.episode_statistics
+    
+    def get_final_agent_statistics(self):
+        """Get final learned parameters for each agent"""
+        return self.get_learning_statistics()
+

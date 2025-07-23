@@ -3,7 +3,7 @@ import random
 from typing import Tuple
 import math
 
-from .Globals_ import *
+from .global_map import *
 from .utils import  compute_advantage, update_exponential_moving_average,sigmoid
 
 
