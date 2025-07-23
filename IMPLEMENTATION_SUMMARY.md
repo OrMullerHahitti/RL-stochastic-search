@@ -72,7 +72,7 @@ from src.global_map import Algorithm
 dcop = DCOP_DSA_RL(
   id_=0, A=30, d=10, dcop_name='dsa_rl',
   algorithm=Algorithm.DSA_RL, k=0.7,
-  p0=0.5, learning_rate=0.01, baseline_decay=0.9, episode_length=20
+  p0=0.5, learning_rate=0.01, baseline_decay=0.9, iteration_per_episode=20
 )
 
 # Execute and get costs

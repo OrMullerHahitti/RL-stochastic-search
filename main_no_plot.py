@@ -26,9 +26,9 @@ def create_selected_dcop(i,algorithm, k, p=None, **kwargs):
         p0 = kwargs.get('p0', 0.5)
         learning_rate = kwargs.get('learning_rate', 0.01)
         baseline_decay = kwargs.get('baseline_decay', 0.9)
-        episode_length = kwargs.get('episode_length', 20)
+        iteration_per_episode = kwargs.get('iteration_per_episode', 20)
         num_episodes = kwargs.get('num_episodes', repetitions)  # Use repetitions as episodes
-        return DCOP_DSA_RL(0,A,D,dcop_name,algorithm, k, p0, learning_rate, baseline_decay, episode_length, num_episodes, agent_mu_config)
+        return DCOP_DSA_RL(0,A,D,dcop_name,algorithm, k, p0, learning_rate, baseline_decay, iteration_per_episode, num_episodes, agent_mu_config)
 
 # Function to solve DCOPs and calculate average global cost
 def solve_dcops(dcops, return_stats=False):

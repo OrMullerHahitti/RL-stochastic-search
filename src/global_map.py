@@ -66,25 +66,19 @@ MASTER_CONFIG = {
     # These k values determine edge probability in constraint graphs
     "graph_densities": [0.2, 0.7],  # k values for sparse/dense graphs
     # Problem size parameters - consistent across ALL algorithms
-    "agents": int(os.environ.get("DSA_AGENTS", 30)),  # Number of agents (countries)
-    "domain_size": int(
-        os.environ.get("DSA_DOMAIN_SIZE", 10)
-    ),  # Domain size (colors available)
-    # Experiment execution parameters - applied to ALL algorithms
-    "repetitions": int(
-        os.environ.get("DSA_REPETITIONS", 30)
-    ),  # Number of repetitions per algorithm
-    "iterations": int(
-        os.environ.get("DSA_ITERATIONS", 100)
-    ),  # Iterations per experiment run
+    "agents": 30,  # Number of agents (countries)
+    "domain_size": 10,
+    "repetitions": 30,  # Number of repetitions per algorithm
+    "iterations":  100,
+      # Iterations per experiment run
 }
 
 
 
-DEFAULT_PRIORITY_VARIANT = MASTER_CONFIG["priority_variant"]['hierarchical']
+DEFAULT_PRIORITY_VARIANT = MASTER_CONFIG["priority_variant"]['stratified']  # Default priority variant for DSA and MGM
 repetitions = MASTER_CONFIG["repetitions"] # Number of repetitions per algorithm OR number of episodes per RL run
-incomplete_iterations = MASTER_CONFIG["iterations"] # Number of iterations per experiment run or *episode length*
-DEFAULT_AGENTS = MASTER_CONFIG["agents"]
+iteration_per_episode = MASTER_CONFIG["iterations"] # Number of iterations per experiment run or *episode length*
+DEFAULT_AGENTS_NUM = MASTER_CONFIG["agents"]
 DEFAULT_DOMAIN_SIZE = MASTER_CONFIG["domain_size"]
 DEFAULT_GRAPH_DENSITIES = MASTER_CONFIG["graph_densities"]
 
@@ -128,7 +122,7 @@ def create_mgm_config(agent_mu_config):
 
 
 def create_dsa_rl_config(
-    agent_mu_config, p0, learning_rate, baseline_decay, episode_length
+    agent_mu_config, p0, learning_rate, baseline_decay, iteration_per_episode
 ):
     """Create DSA-RL configuration with specified parameters"""
     return {
@@ -136,7 +130,7 @@ def create_dsa_rl_config(
         "p0": p0,
         "learning_rate": learning_rate,
         "baseline_decay": baseline_decay,
-        "episode_length": episode_length,
+        "iteration_per_episode": iteration_per_episode,
         "agent_mu_config": agent_mu_config,
         "name": f'DSA_RL_{agent_mu_config["default_mu"]}',
     }
@@ -144,9 +138,11 @@ def create_dsa_rl_config(
 
 # Default DSA and MGM configurations (for backward compatibility)
 DSA_CONFIGS = create_dsa_configs(DEFAULT_PRIORITY_VARIANT)
+
 MGM_CONFIG = create_mgm_config(DEFAULT_PRIORITY_VARIANT)
+
 DSA_RL_CONFIG = create_dsa_rl_config(
-    DEFAULT_PRIORITY_VARIANT, 0.5, 0.01, 0.9, incomplete_iterations
+    DEFAULT_PRIORITY_VARIANT, 0.5, 0.01, 0.9, iteration_per_episode
 )
 
 
@@ -281,33 +277,4 @@ MINIMAL_EXPERIMENT = [DSA_CONFIGS[1], MGM_CONFIG, DSA_RL_CONFIG]  # DSA p=0.7, M
 
 # =============================================================================
 # USAGE SUMMARY - HOW TO USE THE CENTRALIZED CONFIGURATION SYSTEM
-# =============================================================================
-#
-# 🎯 GOAL: Ensure fair comparison by guaranteeing ALL algorithms use identical parameters
-#
-# 📝 HOW TO USE:
-# 1. Edit MASTER_CONFIG at the top of this file
-# 2. Run your experiments - ALL algorithms automatically use your settings
-# 3. Use print_master_config() to verify what parameters ALL algorithms will use
-#
-# 🔧 EXAMPLE CHANGES:
-#
-# To switch ALL algorithms to uniform priorities:
-#   MASTER_CONFIG['priority_variant'] = 'uniform'
-#
-# To test on different graph densities:
-#   MASTER_CONFIG['graph_densities'] = [0.3, 0.8]
-#
-# To run faster tests:
-#   MASTER_CONFIG['repetitions'] = 5
-#   MASTER_CONFIG['iterations'] = 20
-#
-# To test smaller problems:
-#   MASTER_CONFIG['agents'] = 15
-#   MASTER_CONFIG['domain_size'] = 5
-#
-# ✅ GUARANTEED OUTCOME:
-# Every algorithm (DSA p=0.2/0.7/1.0, MGM, DSA-RL) will use your exact settings,
-# ensuring truly fair comparisons across all methods.
-#
 # =============================================================================

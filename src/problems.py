@@ -297,14 +297,14 @@ class DCOP_MGM(DCOP):
 
 # Class for DCOP using DSA with REINFORCE learning
 class DCOP_DSA_RL(DCOP):
-    def __init__(self, id_, A, d, dcop_name, algorithm, k, p0=0.7, learning_rate=0.01,
-                 baseline_decay=0.9, episode_length=20, num_episodes=1, agent_mu_config=None):
+    def __init__(self, id_, A, d, dcop_name, algorithm, k, p0, learning_rate,
+                 baseline_decay, iteration_per_episode, num_episodes, agent_mu_config=None):
 
         # Initialize hyperparameters before calling parent init
         self.p0 = p0
         self.learning_rate = learning_rate
         self.baseline_decay = baseline_decay
-        self.episode_length = episode_length
+        self.iteration_per_episode = iteration_per_episode
         self.num_episodes = num_episodes  # Number of learning episodes to run
         
         # Call parent initialization first
@@ -358,30 +358,18 @@ class DCOP_DSA_RL(DCOP):
         """Reset agents for the next episode while keeping the graph structure intact."""
         # Regenerate penalties for existing neighbors
         for neighbor in self.neighbors:
-            # Randomize penalties using the same deterministic random generator
-            neighbor.penalty_a1 = self.rnd_penalties.normalvariate(
-                self.agent_mu_values[neighbor.a1.id_],
-                self.agent_mu_config.get('default_sigma', 10)
-            )
-            neighbor.penalty_a2 = self.rnd_penalties.normalvariate(
-                self.agent_mu_values[neighbor.a2.id_],
-                self.agent_mu_config.get('default_sigma', 10)
-            )
-            # Recreate the cost table with new penalties
             neighbor.create_dictionary_of_costs()
-
         # Reset agent variables to a random value within their domain
         for agent in self.agents:
-            agent.variable = agent.agent_random.choice(agent.domain)
+            agent.variable = agent.agent_random.randint(1,self.d)
+
 
         # Reset episode tracking
         self.current_episode += 1
         self.iteration_in_episode = 0
         self.episode_rewards = {agent.id_: [] for agent in self.agents}
         self.generate_agent_mu_values()
-        # Reset global clock for this episode
-        self.global_clock = 0
-    
+
 
     
     def run_single_episode(self, episode_num):
@@ -398,8 +386,8 @@ class DCOP_DSA_RL(DCOP):
         
         prev_global_cost = initial_global_cost
         
-        # Run for episode_length iterations
-        for i in range(self.episode_length):
+        # Run for iteration_per_episode iterations
+        for i in range(self.iteration_per_episode):
             self.global_clock += 1
             self.iteration_in_episode += 1
             
@@ -436,7 +424,7 @@ class DCOP_DSA_RL(DCOP):
         """Update agent theta parameters after episode completion"""
         for agent in self.agents:
             if hasattr(agent, 'finish_episode'):
-                agent_rewards = self.episode_rewards.get(agent.id_, [])
+                agent_rewards = self.episode_rewards[agent.id_]
                 agent.finish_episode(agent_rewards)
     
     def get_learning_statistics(self):

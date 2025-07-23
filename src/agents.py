@@ -177,9 +177,7 @@ class DsaAgentAdaptive(Agent):
         # Update probability for next episode
         self.p = sigmoid(self.theta)
     
-    def set_p(self):
-        """Update probability from current theta"""
-        self.p = sigmoid(self.theta)
+
 
 
 
