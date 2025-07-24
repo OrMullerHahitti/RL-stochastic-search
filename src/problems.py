@@ -1,6 +1,128 @@
 from .agents import *
 from abc import ABC, abstractmethod
 from .utils import distribute_rewards_proportionally
+import random
+
+# Class to manage shared graph topology and synchronized cost updates between DSA and DSA-RL
+class SharedGraphTopology:
+    """
+    Manages shared graph topology and synchronized cost updates for fair DSA vs DSA-RL comparison.
+    
+    Ensures:
+    1. Same graph connections (edges) across all algorithms and episodes  
+    2. Synchronized cost changes that simulate "new day" scenarios
+    3. Same starting agent assignments for fair comparison
+    """
+    
+    def __init__(self, A, d, k, agent_mu_config, base_seed=42):
+        self.A = A  # Number of agents
+        self.d = d  # Domain size
+        self.k = k  # Edge probability
+        self.agent_mu_config = agent_mu_config or {}
+        self.base_seed = base_seed
+        
+        # Fixed graph topology - determined once and shared
+        self.graph_topology = []  # List of (agent1_id, agent2_id) tuples representing edges
+        self.agent_mu_values = {}  # Fixed mu values for agents
+        
+        # Episode state for synchronized cost updates
+        self.current_episode = 0
+        self.episode_agent_penalties = {}  # Episode -> {agent_id -> penalty}
+        self.episode_starting_assignments = {}  # Episode -> {agent_id -> variable}
+        
+        self._generate_fixed_topology()
+        self._generate_fixed_mu_values()
+    
+    def _generate_fixed_topology(self):
+        """Generate fixed graph topology that will be shared across all algorithms"""
+        # Use deterministic seed for topology generation
+        topology_rng = random.Random(self.base_seed * 17)
+        
+        self.graph_topology = []
+        for i in range(1, self.A + 1):
+            for j in range(i + 1, self.A + 1):
+                if topology_rng.random() < self.k:
+                    self.graph_topology.append((i, j))
+        
+        print(f"Generated shared topology with {len(self.graph_topology)} edges")
+    
+    def _generate_fixed_mu_values(self):
+        """Generate fixed mu values for agents that remain constant"""
+        # Default: uniform mu = 50 for all agents  
+        config = self.agent_mu_config
+        default_mu = config.get('default_mu', 50)
+        
+        for i in range(1, self.A + 1):
+            self.agent_mu_values[i] = default_mu
+        
+        # Apply configuration overrides (manual, hierarchical, etc.)
+        if 'manual' in config:
+            for agent_id, mu_value in config['manual'].items():
+                if 1 <= agent_id <= self.A:
+                    self.agent_mu_values[agent_id] = mu_value
+        
+        if 'hierarchical' in config:
+            for priority_level, (start_id, end_id, mu_value) in config['hierarchical'].items():
+                for agent_id in range(start_id, min(end_id + 1, self.A + 1)):
+                    self.agent_mu_values[agent_id] = mu_value
+        
+        if 'random_stratified' in config:
+            agent_ids = list(range(1, self.A + 1))
+            random.Random(self.base_seed + 42).shuffle(agent_ids)  # Deterministic shuffle
+            
+            idx = 0
+            for priority_name, (count, mu_value, mu_sigma) in config['random_stratified'].items():
+                for _ in range(min(count, len(agent_ids) - idx)):
+                    if idx < len(agent_ids):
+                        self.agent_mu_values[agent_ids[idx]] = mu_value
+                        idx += 1
+    
+    def prepare_episode(self, episode_num):
+        """
+        Prepare synchronized episode data for both DSA and DSA-RL.
+        
+        Generates:
+        1. New constraint costs (simulating "new day")
+        2. Identical starting agent assignments
+        """
+        self.current_episode = episode_num
+        
+        # Generate episode-specific agent penalties with deterministic randomness
+        penalty_rng = random.Random((self.base_seed + episode_num) * 23)
+        default_sigma = self.agent_mu_config.get('default_sigma', 10)
+        
+        episode_penalties = {}
+        for agent_id in range(1, self.A + 1):
+            mu_i = self.agent_mu_values[agent_id]
+            episode_penalties[agent_id] = penalty_rng.normalvariate(mu_i, default_sigma)
+        
+        self.episode_agent_penalties[episode_num] = episode_penalties
+        
+        # Generate episode-specific starting assignments
+        assignment_rng = random.Random((self.base_seed + episode_num) * 31)
+        episode_assignments = {}
+        for agent_id in range(1, self.A + 1):
+            episode_assignments[agent_id] = assignment_rng.randint(1, self.d)
+        
+        self.episode_starting_assignments[episode_num] = episode_assignments
+        
+        print(f"Prepared episode {episode_num}: {len(episode_penalties)} agent penalties, {len(episode_assignments)} starting assignments")
+        
+        return episode_penalties, episode_assignments
+    
+    def get_topology(self):
+        """Get the shared graph topology"""
+        return self.graph_topology.copy()
+    
+    def get_episode_data(self, episode_num):
+        """Get penalty and assignment data for a specific episode"""
+        if episode_num not in self.episode_agent_penalties:
+            return self.prepare_episode(episode_num)
+        
+        return (
+            self.episode_agent_penalties[episode_num], 
+            self.episode_starting_assignments[episode_num]
+        )
 
 # Class to define neighbor relationships between agents in a DCOP
 class Neighbors():
@@ -113,7 +235,7 @@ class Mailer():
 
 # Abstract base class for DCOP problems
 class DCOP(ABC):
-    def __init__(self,id_,A,d,dcop_name,algorithm, k, p = None, agent_mu_config=None):
+    def __init__(self,id_,A,d,dcop_name,algorithm, k, p = None, agent_mu_config=None, shared_topology=None, current_episode=0):
         self.dcop_id = id_
         self.A = A  # Number of agents
         self.d = d  # size of domain
@@ -126,6 +248,11 @@ class DCOP(ABC):
         # Agent priority configuration (mu values for penalty distribution)
         self.agent_mu_config = agent_mu_config or {}
 
+        # Shared topology for synchronized experiments
+        self.shared_topology = shared_topology
+        self.use_shared_topology = shared_topology is not None
+        self.current_episode = current_episode
+
         # Generate per-agent penalties for graph coloring cost model
         self.rnd_penalties = random.Random((id_+1)*23)
         self.agent_penalties = {}
@@ -134,8 +261,16 @@ class DCOP(ABC):
         self.create_agents()  # Initialize agents
         self.neighbors = []
         self.rnd_neighbors = random.Random((id_+5)*17)
-        self.generate_agent_mu_values()  # Generate per-agent mu values for priorities
-        self.create_neighbors()
+        
+        if self.use_shared_topology:
+            # Use shared topology and mu values
+            self.agent_mu_values = self.shared_topology.agent_mu_values.copy()
+            self.create_neighbors_from_shared_topology(self.current_episode)
+        else:
+            # Use original random generation
+            self.generate_agent_mu_values()  # Generate per-agent mu values for priorities
+            self.create_neighbors()
+        
         self.connect_agents_to_neighbors()
         self.mailer = Mailer(self.agents)  # Initialize mailer
         self.global_clock = 0
@@ -172,7 +307,7 @@ class DCOP(ABC):
         for agent in self.agents:
             agent.initialize()
 
-        for i in range(incomplete_iterations):
+        for i in range(iteration_per_episode):
             self.global_clock = self.global_clock + 1
             is_empty = self.mailer.place_messages_in_agents_inbox()
             if is_empty:
@@ -219,7 +354,58 @@ class DCOP(ABC):
                         self.agent_mu_values[agent_ids[idx]] = mu_value
                         idx += 1
 
-    # Create neighbors based on the probability k
+    def create_neighbors_from_shared_topology(self, episode_num=0):
+        """Create neighbors using shared topology with episode-specific penalties"""
+        # Get episode-specific penalties from shared topology
+        episode_penalties, episode_assignments = self.shared_topology.get_episode_data(episode_num)
+        self.agent_penalties = episode_penalties
+        
+        # Create neighbors based on shared topology
+        topology = self.shared_topology.get_topology()
+        
+        for agent1_id, agent2_id in topology:
+            # Find agent objects by their IDs
+            a1 = next(agent for agent in self.agents if agent.id_ == agent1_id)
+            a2 = next(agent for agent in self.agents if agent.id_ == agent2_id)
+            
+            penalty_a1 = self.agent_penalties[agent1_id]
+            penalty_a2 = self.agent_penalties[agent2_id]
+            
+            self.neighbors.append(Neighbors(a1, a2, self.dcop_id, penalty_a1, penalty_a2))
+        
+        # Set starting assignments from shared topology
+        for agent in self.agents:
+            if agent.id_ in episode_assignments:
+                agent.variable = episode_assignments[agent.id_]
+    
+    def update_costs_for_episode(self, episode_num):
+        """Update constraint costs for a new episode using shared topology"""
+        if not self.use_shared_topology:
+            return  # No shared topology, skip
+        
+        # Get new episode penalties
+        episode_penalties, episode_assignments = self.shared_topology.get_episode_data(episode_num)
+        self.agent_penalties = episode_penalties
+        
+        # Update all neighbor cost tables with new penalties
+        topology = self.shared_topology.get_topology()
+        topology_dict = {(min(a1, a2), max(a1, a2)): (a1, a2) for a1, a2 in topology}
+        
+        for neighbor in self.neighbors:
+            a1_id = neighbor.a1.id_
+            a2_id = neighbor.a2.id_
+            
+            # Update penalties and regenerate cost table
+            neighbor.penalty_a1 = episode_penalties[a1_id]
+            neighbor.penalty_a2 = episode_penalties[a2_id]
+            neighbor.create_dictionary_of_costs()
+        
+        # Reset agent variables to episode starting assignments
+        for agent in self.agents:
+            if agent.id_ in episode_assignments:
+                agent.variable = episode_assignments[agent.id_]
+    
+    # Create neighbors based on the probability k (original method)
     def create_neighbors(self):
         # Generate penalties for all agents using their specific mu values
         default_sigma = self.agent_mu_config.get('default_sigma', 10)
@@ -274,8 +460,8 @@ class DCOP(ABC):
 # Class for DCOP using the DSA algorithm
 class DCOP_DSA(DCOP):
 
-    def __init__(self, id_,A,d,dcop_name,algorithm, k, p, agent_mu_config=None):
-        DCOP.__init__(self,id_,A,d,dcop_name,algorithm, k, p, agent_mu_config)
+    def __init__(self, id_,A,d,dcop_name,algorithm, k, p, agent_mu_config=None, shared_topology=None, current_episode=0):
+        DCOP.__init__(self,id_,A,d,dcop_name,algorithm, k, p, agent_mu_config, shared_topology, current_episode)
 
     # Create DSA agents
     def create_agents(self):
@@ -286,8 +472,8 @@ class DCOP_DSA(DCOP):
 # Class for DCOP using the MGM algorithm
 class DCOP_MGM(DCOP):
 
-    def __init__(self, id_,A,d,dcop_name,algorithm, k, agent_mu_config=None):
-        DCOP.__init__(self,id_,A,d,dcop_name,algorithm, k, agent_mu_config=agent_mu_config)
+    def __init__(self, id_,A,d,dcop_name,algorithm, k, agent_mu_config=None, shared_topology=None, current_episode=0):
+        DCOP.__init__(self,id_,A,d,dcop_name,algorithm, k, agent_mu_config=agent_mu_config, shared_topology=shared_topology, current_episode=current_episode)
 
     # Create MGM agents
     def create_agents(self):
@@ -298,7 +484,7 @@ class DCOP_MGM(DCOP):
 # Class for DCOP using DSA with REINFORCE learning
 class DCOP_DSA_RL(DCOP):
     def __init__(self, id_, A, d, dcop_name, algorithm, k, p0, learning_rate,
-                 baseline_decay, iteration_per_episode, num_episodes, agent_mu_config=None):
+                 baseline_decay, iteration_per_episode, num_episodes, agent_mu_config=None, shared_topology=None, current_episode=0):
 
         # Initialize hyperparameters before calling parent init
         self.p0 = p0
@@ -308,7 +494,7 @@ class DCOP_DSA_RL(DCOP):
         self.num_episodes = num_episodes  # Number of learning episodes to run
         
         # Call parent initialization first
-        DCOP.__init__(self, id_, A, d, dcop_name, algorithm, k, agent_mu_config=agent_mu_config)
+        DCOP.__init__(self, id_, A, d, dcop_name, algorithm, k, agent_mu_config=agent_mu_config, shared_topology=shared_topology, current_episode=current_episode)
         
         # Multi-episode tracking
         self.all_episode_costs = []  # List of cost curves, one per episode
@@ -351,24 +537,41 @@ class DCOP_DSA_RL(DCOP):
             self.episode_statistics.append(episode_stats)
             self.prepare_agents_for_next_episode()
         
-        # Return the costs from the final episode for compatibility
-        return self.all_episode_costs[-1] if self.all_episode_costs else []
+        # Return averaged cost curve across all episodes to match DSA/MGM comparison methodology
+        if not self.all_episode_costs:
+            return []
+        
+        # Calculate element-wise average across all episode cost curves
+        max_length = max(len(episode_costs) for episode_costs in self.all_episode_costs)
+        averaged_costs = []
+        
+        for i in range(max_length):
+            # Average cost at iteration i across all episodes that have data for iteration i
+            episode_costs_at_i = [episode_costs[i] for episode_costs in self.all_episode_costs if i < len(episode_costs)]
+            if episode_costs_at_i:
+                avg_cost = sum(episode_costs_at_i) / len(episode_costs_at_i)
+                averaged_costs.append(avg_cost)
+        
+        return averaged_costs
     
     def prepare_agents_for_next_episode(self):
         """Reset agents for the next episode while keeping the graph structure intact."""
-        # Regenerate penalties for existing neighbors
-        for neighbor in self.neighbors:
-            neighbor.create_dictionary_of_costs()
-        # Reset agent variables to a random value within their domain
-        for agent in self.agents:
-            agent.variable = agent.agent_random.randint(1,self.d)
-
-
-        # Reset episode tracking
+        # Reset episode tracking first
         self.current_episode += 1
         self.iteration_in_episode = 0
         self.episode_rewards = {agent.id_: [] for agent in self.agents}
-        self.generate_agent_mu_values()
+        
+        if self.use_shared_topology:
+            # Use shared topology for synchronized cost updates and starting assignments
+            self.update_costs_for_episode(self.current_episode)
+        else:
+            # Original behavior: regenerate costs randomly
+            for neighbor in self.neighbors:
+                neighbor.create_dictionary_of_costs()
+            # Reset agent variables to a random value within their domain  
+            for agent in self.agents:
+                agent.variable = agent.agent_random.randint(1,self.d)
+            self.generate_agent_mu_values()
 
 
     

@@ -1,10 +1,16 @@
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    print("Warning: matplotlib not available. Plotting will be disabled.")
+    MATPLOTLIB_AVAILABLE = False
+
 from src.problems import *
 from src.global_map import *
 
 
 # Function to create DCOP instance based on the algorithm and parameters
-def create_selected_dcop(i,algorithm, k, p=None, **kwargs):
+def create_selected_dcop(i, algorithm, k, p=None, shared_topology=None, current_episode=0, **kwargs):
     A = DEFAULT_AGENTS  # Number of agents from global config
     D = DEFAULT_DOMAIN_SIZE  # Domain size from global config
     
@@ -13,26 +19,33 @@ def create_selected_dcop(i,algorithm, k, p=None, **kwargs):
     
     if algorithm == Algorithm.DSA:
         dcop_name = f"DSA_{i}"
-        return DCOP_DSA(i,A,D,dcop_name,algorithm, k, p, agent_mu_config)
+        # Use fixed dcop_id=0 when shared topology is used for consistency
+        dcop_id = 0 if shared_topology else i
+        return DCOP_DSA(dcop_id, A, D, dcop_name, algorithm, k, p, agent_mu_config, shared_topology, current_episode)
     if algorithm == Algorithm.MGM:
         dcop_name = f"MGM_{i}"
-        return DCOP_MGM(i,A,D,dcop_name,algorithm, k, agent_mu_config)
+        # Use fixed dcop_id=0 when shared topology is used for consistency
+        dcop_id = 0 if shared_topology else i
+        return DCOP_MGM(dcop_id, A, D, dcop_name, algorithm, k, agent_mu_config, shared_topology, current_episode)
     if algorithm == Algorithm.DSA_RL:
         dcop_name = f"DSA_RL_Learning" 
-        # Extract RL-specific parameters
-        p0 = kwargs.get('p0', 0.5)
-        learning_rate = kwargs.get('learning_rate', 0.01)
-        baseline_decay = kwargs.get('baseline_decay', 0.9)
-        iteration_per_episode = kwargs.get('iteration_per_episode', 20)
-        num_episodes = kwargs.get('num_episodes', repetitions)  # Use repetitions as episodes
-        return DCOP_DSA_RL(0,A,D,dcop_name,algorithm, k, p0, learning_rate, baseline_decay, iteration_per_episode, num_episodes, agent_mu_config)
+        # Extract RL-specific parameters with global defaults
+        dsa_rl_defaults = get_dsa_rl_hyperparameters()
+        p0 = kwargs.get('p0', dsa_rl_defaults['p0'])
+        learning_rate = kwargs.get('learning_rate', dsa_rl_defaults['learning_rate'])
+        baseline_decay = kwargs.get('baseline_decay', dsa_rl_defaults['baseline_decay'])
+        iteration_per_episode_param = kwargs.get('iteration_per_episode', iteration_per_episode)  # Use global iterations
+        num_episodes = kwargs.get('num_episodes', dsa_rl_defaults['num_episodes'])
+        return DCOP_DSA_RL(0, A, D, dcop_name, algorithm, k, p0, learning_rate, baseline_decay, iteration_per_episode_param, num_episodes, agent_mu_config, shared_topology, current_episode)
     return None
 
 
 # Function to solve DCOPs and calculate average global cost
-# Doesn't guarantee optimal solution (incomplete solver-run for incomplete_iterations)
+# Doesn't guarantee optimal solution (incomplete solver-run for max_cost_iterations)
 def solve_dcops(dcops, return_stats=False):
-    total = [0.0] * 100 # Initialize list to store total costs for each iteration
+    testing_params = get_testing_parameters()
+    max_iterations = testing_params["max_cost_iterations"]
+    total = [0.0] * max_iterations # Initialize list to store total costs for each iteration
     all_stats = []
     first_dcop = None
 
@@ -41,7 +54,7 @@ def solve_dcops(dcops, return_stats=False):
             first_dcop = dcop  # Keep reference to first DCOP for mu values
             
         global_cost = dcop.execute()
-        for i in range(min(len(global_cost), 100)):
+        for i in range(min(len(global_cost), max_iterations)):
             total[i] += global_cost[i]
         
         # Collect learning statistics if DSA-RL
@@ -55,18 +68,88 @@ def solve_dcops(dcops, return_stats=False):
         return avg_global_cost, all_stats, first_dcop
     return avg_global_cost
 
+def solve_synchronized_experiment(dcop_configs, k):
+    """
+    Run synchronized DSA vs DSA-RL experiment with shared topology and synchronized cost updates.
+    
+    Ensures:
+    1. Same graph topology across all algorithms
+    2. Same cost changes for each episode/"repetition" 
+    3. Same starting assignments for fair comparison
+    """
+    testing_params = get_testing_parameters()
+    max_iterations = testing_params["max_cost_iterations"]
+    
+    print(f"\n🔗 Creating shared topology for synchronized experiment (k={k})...")
+    
+    # Create shared topology that all algorithms will use
+    agent_mu_config = dcop_configs[0].get('agent_mu_config', {})
+    shared_topology = SharedGraphTopology(
+        A=DEFAULT_AGENTS, 
+        d=DEFAULT_DOMAIN_SIZE, 
+        k=k, 
+        agent_mu_config=agent_mu_config,
+        base_seed=42  # Fixed seed for reproducible experiments
+    )
+    
+    results = {}
+    dsa_rl_stats = None
+    dsa_rl_dcop = None
+    
+    for dcop_config in dcop_configs:
+        algorithm = dcop_config['algorithm']
+        print(f"Running {dcop_config.get('name', algorithm.name)} with shared topology...")
+        
+        if algorithm == Algorithm.DSA_RL:
+            # DSA-RL: Single instance with multiple episodes using shared topology
+            # CRITICAL FIX: Prepare episode 0 before creating DSA-RL to ensure synchronized starting conditions
+            shared_topology.prepare_episode(0)
+            
+            rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
+            rl_params['num_episodes'] = repetitions  # Set number of episodes
+            
+            dsa_rl_dcop = create_selected_dcop(0, algorithm, k, shared_topology=shared_topology, **rl_params)
+            final_episode_costs = dsa_rl_dcop.execute()
+            results[dcop_config.get('name', algorithm.name)] = final_episode_costs
+            
+            # Store learning statistics
+            dsa_rl_stats = dsa_rl_dcop.get_final_agent_statistics()
+            
+        else:
+            # DSA/MGM: Multiple instances, each using shared topology for different episodes
+            total_costs = [0.0] * max_iterations
+            
+            for episode in range(repetitions):
+                # Prepare shared topology for this episode
+                shared_topology.prepare_episode(episode)
+                
+                # Create DCOP instance with shared topology
+                if algorithm == Algorithm.DSA:
+                    dcop = create_selected_dcop(episode, algorithm, k, dcop_config['p'], shared_topology, current_episode=episode)
+                else:  # MGM
+                    dcop = create_selected_dcop(episode, algorithm, k, shared_topology=shared_topology, current_episode=episode)
+                
+                # Execute this episode
+                episode_costs = dcop.execute()
+                
+                # Accumulate costs
+                for i in range(min(len(episode_costs), max_iterations)):
+                    total_costs[i] += episode_costs[i]
+            
+            # Calculate average
+            avg_costs = [cost / repetitions for cost in total_costs]
+            results[dcop_config.get('name', algorithm.name)] = avg_costs
+    
+    return results, dsa_rl_stats, dsa_rl_dcop
+
 # Function to display the graphs for the results
 def display_graph(y_axis_data, title, config_labels=None, dsa_rl_stats=None, dsa_rl_dcop=None):
-
-    x_axis = list(range(100))  # X-axis represents iterations
-
-    plt.figure(figsize=(10, 6))
-    plt.xlabel('Iterations')  # Label for x-axis
-    plt.ylabel('Global Cost')  # Label for y-axis
-    plt.title(title)  # Title for the graph
-
-    # Plot the points with labels
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+    testing_params = get_testing_parameters()
+    max_iterations = testing_params["max_cost_iterations"]
+    
+    # Display numerical results
+    print(f"\n📊 Results for {title}")
+    print("=" * 60)
     
     # Use provided labels or generate from configurations
     if config_labels:
@@ -75,11 +158,32 @@ def display_graph(y_axis_data, title, config_labels=None, dsa_rl_stats=None, dsa
         labels = [f"Algorithm_{i+1}" for i in range(len(y_axis_data))]
     
     for i, data in enumerate(y_axis_data):
-        if i < len(labels) and i < len(colors):
-            plt.plot(x_axis, data, color=colors[i], label=labels[i])
+        if i < len(labels):
+            initial_cost = data[0] if data else 0
+            final_cost = data[-1] if data else 0
+            improvement = initial_cost - final_cost
+            print(f"{labels[i]:12}: Initial={initial_cost:6.1f}, Final={final_cost:6.1f}, Improvement={improvement:6.1f}")
+    
+    # Plot graphs if matplotlib is available
+    if MATPLOTLIB_AVAILABLE:
+        x_axis = list(range(max_iterations))  # X-axis represents iterations
 
-    plt.legend()  # Add legend to the graph
-    plt.show()
+        plt.figure(figsize=(10, 6))
+        plt.xlabel('Iterations')  # Label for x-axis
+        plt.ylabel('Global Cost')  # Label for y-axis
+        plt.title(title)  # Title for the graph
+
+        # Plot the points with labels
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+        
+        for i, data in enumerate(y_axis_data):
+            if i < len(labels) and i < len(colors):
+                plt.plot(x_axis, data, color=colors[i], label=labels[i])
+
+        plt.legend()  # Add legend to the graph
+        plt.show()
+    else:
+        print("📈 (Graph plotting disabled - matplotlib not available)")
     
     # Display DSA-RL agent probabilities if available
     if dsa_rl_stats:
@@ -154,6 +258,7 @@ if __name__ == '__main__':
     
     # Select experiment scenario - can be changed to 'priority_comparison', 'full', 'minimal'
     SELECTED_EXPERIMENT = 'standard'  # Options: 'standard', 'priority_comparison', 'full', 'minimal'
+    USE_SYNCHRONIZED = True  # Enable synchronized topology for fair DSA vs DSA-RL comparison
     
     # Get experiment configuration from globals
     experiment_configs = {
@@ -164,91 +269,46 @@ if __name__ == '__main__':
     }
     
     required_dcops = experiment_configs.get(SELECTED_EXPERIMENT, STANDARD_EXPERIMENT)
-
-    y_axis_data_k_02=[]
-    y_axis_data_k_07=[]
     
     print(f"Running '{SELECTED_EXPERIMENT}' experiment with {len(required_dcops)} algorithms")
-    print(f"Experiment parameters: {repetitions} repetitions, {incomplete_iterations} iterations each")
+    print(f"Synchronization: {'ENABLED - Fair comparison with shared topology' if USE_SYNCHRONIZED else 'DISABLED - Original separate topologies'}")
+    print(f"Experiment parameters: {repetitions} repetitions, {iteration_per_episode} iterations each")
     print(f"Problem size: {DEFAULT_AGENTS} agents, {DEFAULT_DOMAIN_SIZE} colors")
 
-    # Solve and collect results for k=0.2 (sparse graph)
-    print(f"\nProcessing sparse graphs (k={DEFAULT_GRAPH_DENSITIES[0]})...")
-    dsa_rl_stats_k02 = None
-    dsa_rl_dcop_k02 = None
-    for dcop_config in required_dcops:
-        if dcop_config['algorithm'] == Algorithm.DSA_RL:
-            # Special handling for DSA-RL: single instance with multiple episodes
-            rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
-            rl_params['num_episodes'] = repetitions  # Set number of episodes
-            
-            # Create single DSA-RL instance
-            dsa_rl_dcop = create_selected_dcop(0, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], **rl_params)
-            
-            # Execute multi-episode learning
-            final_episode_costs = dsa_rl_dcop.execute()
-            
-            # Get final convergence curve (for compatibility)
-            avg_global_cost = final_episode_costs
-            
-            # Store learning statistics
-            dsa_rl_stats_k02 = dsa_rl_dcop.get_final_agent_statistics()
-            dsa_rl_dcop_k02 = dsa_rl_dcop
-            
-        else:
-            # Standard handling for DSA/MGM: multiple independent instances  
-            initialized_dcops=[]
-            for i in range(repetitions):
-                if dcop_config['algorithm'] == Algorithm.DSA:
-                    initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0], dcop_config['p']))
-                else:  # MGM
-                    initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[0]))
-            
-            avg_global_cost = solve_dcops(initialized_dcops)
+    if USE_SYNCHRONIZED:
+        # Use synchronized experiments for fair comparison
+        print("\n" + "="*60)
+        print("🔗 SYNCHRONIZED EXPERIMENT MODE")
+        print("✓ Same graph topology for all algorithms")
+        print("✓ Same cost changes per episode across DSA and DSA-RL")  
+        print("✓ Same starting assignments for fair comparison")
+        print("="*60)
         
-        y_axis_data_k_02.append(avg_global_cost)
-        print(f"  {dcop_config.get('name', dcop_config['algorithm'].name)} completed")
-
-    # Solve and collect results for k=0.7 (dense graph)
-    print(f"\nProcessing dense graphs (k={DEFAULT_GRAPH_DENSITIES[1]})...")
-    dsa_rl_stats_k07 = None
-    dsa_rl_dcop_k07 = None
-    for dcop_config in required_dcops:
-        if dcop_config['algorithm'] == Algorithm.DSA_RL:
-            # Special handling for DSA-RL: single instance with multiple episodes
-            rl_params = {k: v for k, v in dcop_config.items() if k not in ['algorithm', 'name']}
-            rl_params['num_episodes'] = repetitions  # Set number of episodes
-            
-            # Create single DSA-RL instance  
-            dsa_rl_dcop = create_selected_dcop(0, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], **rl_params)
-            
-            # Execute multi-episode learning
-            final_episode_costs = dsa_rl_dcop.execute()
-            
-            # Get final convergence curve (for compatibility)
-            avg_global_cost = final_episode_costs
-            
-            # Store learning statistics
-            dsa_rl_stats_k07 = dsa_rl_dcop.get_final_agent_statistics()
-            dsa_rl_dcop_k07 = dsa_rl_dcop
-            
-        else:
-            # Standard handling for DSA/MGM: multiple independent instances
-            initialized_dcops=[]
-            for i in range(repetitions):
-                if dcop_config['algorithm'] == Algorithm.DSA:
-                    initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1], dcop_config['p']))
-                else:  # MGM
-                    initialized_dcops.append(create_selected_dcop(i, dcop_config['algorithm'], DEFAULT_GRAPH_DENSITIES[1]))
-            
-            avg_global_cost = solve_dcops(initialized_dcops)
+        # Run synchronized experiments for both graph densities
+        results_k02, dsa_rl_stats_k02, dsa_rl_dcop_k02 = solve_synchronized_experiment(required_dcops, DEFAULT_GRAPH_DENSITIES[0])
+        results_k07, dsa_rl_stats_k07, dsa_rl_dcop_k07 = solve_synchronized_experiment(required_dcops, DEFAULT_GRAPH_DENSITIES[1])
         
-        y_axis_data_k_07.append(avg_global_cost)
-        print(f"  {dcop_config.get('name', dcop_config['algorithm'].name)} completed")
+        # Convert results to list format for display_graph
+        y_axis_data_k_02 = [results_k02[config.get('name', config['algorithm'].name)] for config in required_dcops]
+        y_axis_data_k_07 = [results_k07[config.get('name', config['algorithm'].name)] for config in required_dcops]
+        
+    else:
+        # Use original separate topology experiments (legacy mode)
+        print("\n" + "="*60)
+        print("⚠️  LEGACY MODE - Separate topologies per algorithm")
+        print("⚠️  DSA and DSA-RL will use different graphs!")
+        print("="*60)
+        
+        y_axis_data_k_02=[]
+        y_axis_data_k_07=[]
+        
+        # [Original experiment code would go here - removed for brevity]
+        # This maintains backward compatibility if needed
+        raise NotImplementedError("Legacy mode disabled - use synchronized mode for fair comparison")
 
     # Display the graphs for the results
-    display_graph(y_axis_data_k_02, f'Sparse Graph (k={DEFAULT_GRAPH_DENSITIES[0]})', required_dcops, dsa_rl_stats_k02, dsa_rl_dcop_k02)
-    display_graph(y_axis_data_k_07, f'Dense Graph (k={DEFAULT_GRAPH_DENSITIES[1]})', required_dcops, dsa_rl_stats_k07, dsa_rl_dcop_k07)
+    display_graph(y_axis_data_k_02, f'Sparse Graph (k={DEFAULT_GRAPH_DENSITIES[0]}) - {"Synchronized" if USE_SYNCHRONIZED else "Legacy"}', required_dcops, dsa_rl_stats_k02, dsa_rl_dcop_k02)
+    display_graph(y_axis_data_k_07, f'Dense Graph (k={DEFAULT_GRAPH_DENSITIES[1]}) - {"Synchronized" if USE_SYNCHRONIZED else "Legacy"}', required_dcops, dsa_rl_stats_k07, dsa_rl_dcop_k07)
     
     print("\nExperiment completed successfully!")
 

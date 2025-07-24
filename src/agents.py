@@ -80,9 +80,33 @@ class DsaAgentAdaptive(Agent):
         # Episode data collection
         self.episode_data = []  # Store (gradient, reward) pairs during episode
         self.current_local_cost = 0
+        
+        # Validate initial consistency
+        self.validate_theta_probability_consistency("initialization")
+
+    def validate_theta_probability_consistency(self, context="unknown"):
+        """Validate that p = sigmoid(θ) within numerical tolerance"""
+        from .global_map import get_testing_parameters
+        testing_params = get_testing_parameters()
+        epsilon = testing_params["validation_epsilon"]
+        
+        expected_p = sigmoid(self.theta)
+        if abs(self.p - expected_p) > epsilon:
+            error_msg = (f"Agent {self.id_} theta-probability INCONSISTENCY at {context}: "
+                        f"theta={self.theta:.6f}, stored_p={self.p:.6f}, expected_p={expected_p:.6f}, "
+                        f"error={abs(self.p - expected_p):.2e}")
+            raise ValueError(error_msg)
+        return True
 
     # Compute the new variable value based on messages received
     def compute(self, msgs):
+        # CRITICAL FIX: Always update probability from theta at the start of compute()
+        # This ensures mathematical consistency: p = sigmoid(θ) at all times
+        self.p = sigmoid(self.theta)
+        
+        # Validate consistency after probability update
+        self.validate_theta_probability_consistency("compute_start")
+        
         self.current_local_cost = self.calc_local_cost(msgs)
         min_possible_local_cost = self.current_local_cost  # Initialize minimum cost with current local cost
         best_local_variable = self.variable  # Initialize the best variable index with current variable index
@@ -105,14 +129,10 @@ class DsaAgentAdaptive(Agent):
                 min_possible_local_cost = current_variable_costs
                 best_local_variable = variable
 
-
         # Decision making and gradient collection for REINFORCE
         did_flip = False
         if min_possible_local_cost < self.current_local_cost:
-            # Update probability from current theta
-            self.p = sigmoid(self.theta)
-            
-            # Make decision to flip or not
+            # Make decision to flip or not (probability already updated above)
             if self.agent_random.random() < self.p:
                 self.variable = best_local_variable
                 did_flip = True
@@ -171,11 +191,14 @@ class DsaAgentAdaptive(Agent):
         total_gradient = sum(data['gradient'] for data in self.episode_data)
         self.theta += self.learning_rate * total_gradient * advantage
         
-        # Clear episode data for next episode
-        self.episode_data = []
-        
         # Update probability for next episode
         self.p = sigmoid(self.theta)
+        
+        # Validate consistency after parameter update
+        self.validate_theta_probability_consistency("finish_episode")
+        
+        # Clear episode data for next episode
+        self.episode_data = []
     
 
 
