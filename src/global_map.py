@@ -46,9 +46,9 @@ STRATIFIED_PRIORITY_CONFIG = {
     "default_mu": 50,
     "default_sigma": 10,
     "random_stratified": {
-        "high": (5, 80, 20),  # 5 agents, μ=80, σ=20
+        "high": (15, 80, 20),  # 5 agents, μ=80, σ=20
         "medium": (15, 50, 20),  # 15 agents, μ=50, σ=5
-        "low": (10, 20, 5),  # 10 agents, μ=20, σ=5
+        "low": (20, 20, 5),  # 10 agents, μ=20, σ=5
     },
 }
 
@@ -65,16 +65,15 @@ MASTER_CONFIG = {
     # Graph topology parameters - used by ALL algorithms
     # These k values determine edge probability in constraint graphs
     "graph_densities": [0.2, 0.7],  # k values for sparse/dense graphs
-    # Problem size parameters - consistent across ALL algorithms
-    "agents": 30,  # Number of agents (countries)
-    "domain_size": 10,
+    "agents": 50,  # Number of agents (countries)
+    "domain_size": 20,
     "repetitions": 30,  # Number of repetitions per algorithm
     "iterations": 100,  # Iterations per experiment run or episode length
     
     # DSA-RL specific hyperparameters - centralized single source of truth
     "dsa_rl": {
         "p0": 0.5,  # Initial probability for all agents
-        "learning_rate": 0.001,  # REINFORCE learning rate (α)
+        "learning_rate": 0.005,  # REINFORCE learning rate (α)
         "baseline_decay": 0.99,  # Exponential moving average decay (β)
         "num_episodes": 30,  # Number of learning episodes (same as repetitions)
     },

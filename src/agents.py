@@ -189,8 +189,10 @@ class DsaAgentAdaptive(Agent):
         # Update theta using REINFORCE gradient ascent
         # θ ← θ + α * ∇log π * advantage
         total_gradient = sum(data['gradient'] for data in self.episode_data)
+        max_gradient = 5.0  # Experiment with this value
+        total_gradient = max(-max_gradient, min(max_gradient, total_gradient))
         self.theta += self.learning_rate * total_gradient * advantage
-        
+
         # Update probability for next episode
         self.p = sigmoid(self.theta)
         
