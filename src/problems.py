@@ -2,6 +2,7 @@ from .agents import *
 from abc import ABC, abstractmethod
 from .utils import distribute_rewards_proportionally
 import random
+import numpy as np
 
 # Class to manage shared graph topology and synchronized cost updates between DSA and DSA-RL
 class SharedGraphTopology:
@@ -505,6 +506,18 @@ class DCOP_DSA_RL(DCOP):
         self.iteration_in_episode = 0
         self.episode_rewards = {}  # agent_id -> list of rewards per current episode
 
+        # Global feature tracking for actor-critic
+        self.recent_global_costs = []  # Track recent global costs for trend analysis
+        self.recent_activity_levels = []  # Track recent agent activity
+        self.global_features_history = []  # Store global features for training
+        
+        # Linear Critic (Value Function) parameters
+        self.num_global_features = 6  # Number of global features
+        # Initialize value weights for linear model: V = φ^T * global_features
+        self.value_weights = np.random.normal(0, 0.1, self.num_global_features + 1)  # +1 for bias
+        self.critic_learning_rate = learning_rate * 2  # Critic often needs higher learning rate
+        self.gamma = 0.95  # Discount factor for future rewards
+        
         # Initialize episode rewards tracking for each agent
         for agent in self.agents:
             self.episode_rewards[agent.id_] = []
@@ -561,6 +574,18 @@ class DCOP_DSA_RL(DCOP):
         self.iteration_in_episode = 0
         self.episode_rewards = {agent.id_: [] for agent in self.agents}
         
+        # Reset feature tracking for new episode
+        self.reset_episode_features()
+        
+        # Reset agent-level feature tracking
+        for agent in self.agents:
+            if hasattr(agent, 'recent_costs'):
+                agent.recent_costs = []
+            if hasattr(agent, 'neighbor_changes'):
+                agent.neighbor_changes = []
+            if hasattr(agent, 'previous_neighbor_values'):
+                delattr(agent, 'previous_neighbor_values')
+        
         if self.use_shared_topology:
             # Use shared topology for synchronized cost updates and starting assignments
             self.update_costs_for_episode(self.current_episode)
@@ -576,12 +601,17 @@ class DCOP_DSA_RL(DCOP):
 
     
     def run_single_episode(self, episode_num):
-        """Run a single episode of the DCOP algorithm"""
+        """Run a single episode of the DCOP algorithm with actor-critic learning"""
         episode_costs = []
+        global_features_sequence = []  # Store global features for critic learning
         
         # Calculate initial cost for this episode
         initial_global_cost = self.calc_global_cost()
         episode_costs.append(initial_global_cost)
+        
+        # Extract initial global features
+        initial_features = self.extract_global_features(0)
+        global_features_sequence.append(initial_features)
         
         # Initialize agents (send initial messages)
         for agent in self.agents:
@@ -607,19 +637,47 @@ class DCOP_DSA_RL(DCOP):
             current_global_cost = self.calc_global_cost()
             episode_costs.append(current_global_cost)
             
+            # Extract global features after iteration
+            current_features = self.extract_global_features(i + 1)
+            global_features_sequence.append(current_features)
+            
             # Credit assignment: get changers and their local gains
             changers, local_gains = self.get_changers_and_gains()
             
-            # Calculate global improvement and distribute rewards
+            # Calculate global improvement as reward signal
             global_improvement = self.calculate_global_improvement(prev_global_cost, current_global_cost)
-            iteration_rewards = self.distribute_episode_rewards(changers, local_gains, global_improvement)
             
-            # Store rewards for each agent (0 for non-changers)
+            # Use critic to compute advantages instead of simple reward distribution
+            if len(global_features_sequence) >= 2:
+                prev_features = global_features_sequence[-2]
+                current_features_iter = global_features_sequence[-1]
+                
+                # Update critic and get advantage estimate
+                advantage = self.get_advantage_estimate(
+                    prev_features, global_improvement, current_features_iter, done=False
+                )
+            else:
+                # Fallback for first iteration
+                advantage = global_improvement
+            
+            # Distribute advantages among changers (instead of raw rewards)
+            iteration_advantages = self.distribute_episode_rewards(changers, local_gains, advantage)
+            
+            # Store advantages for each agent (0 for non-changers)
             for agent in self.agents:
-                agent_reward = iteration_rewards.get(agent.id_, 0)
-                self.episode_rewards[agent.id_].append(agent_reward)
+                agent_advantage = iteration_advantages.get(agent.id_, 0)
+                self.episode_rewards[agent.id_].append(agent_advantage)
             
             prev_global_cost = current_global_cost
+        
+        # Final critic update for terminal state
+        if global_features_sequence:
+            final_features = global_features_sequence[-1]
+            final_reward = 0  # Terminal reward
+            self.update_critic(final_features, final_reward, done=True)
+        
+        # Store global features for potential cross-episode learning
+        self.global_features_history.extend(global_features_sequence)
         
         return episode_costs
     
@@ -653,4 +711,129 @@ class DCOP_DSA_RL(DCOP):
     def get_final_agent_statistics(self):
         """Get final learned parameters for each agent"""
         return self.get_learning_statistics()
+    
+    def extract_global_features(self, current_iteration):
+        """Extract global state features for centralized critic"""
+        
+        # Feature 1: total_cost - current global cost
+        total_cost = self.calc_global_cost()
+        
+        # Feature 2: time_norm - normalized time (0 to 1)
+        time_norm = current_iteration / self.iteration_per_episode if self.iteration_per_episode > 0 else 0.0
+        
+        # Feature 3: total_violations - sum of all constraint violations
+        total_violations = sum(agent.count_violations() for agent in self.agents if hasattr(agent, 'count_violations'))
+        
+        # Feature 4: cost_trend - recent cost improvement rate
+        cost_trend = self.calculate_cost_trend()
+        
+        # Feature 5: activity_level - fraction of agents that flipped recently
+        activity_level = self.calculate_activity_level()
+        
+        # Feature 6: convergence_measure - stability of recent costs
+        convergence = self.calculate_convergence_measure()
+        
+        # Update tracking
+        self.recent_global_costs.append(total_cost)
+        if len(self.recent_global_costs) > 10:  # Keep last 10 iterations
+            self.recent_global_costs.pop(0)
+        
+        self.recent_activity_levels.append(activity_level)
+        if len(self.recent_activity_levels) > 5:  # Keep last 5 iterations
+            self.recent_activity_levels.pop(0)
+        
+        # Return global feature vector
+        features = np.array([
+            total_cost,
+            time_norm,
+            total_violations,
+            cost_trend,
+            activity_level,
+            convergence
+        ], dtype=np.float32)
+        
+        return features
+    
+    def calculate_cost_trend(self):
+        """Calculate recent cost improvement trend"""
+        if len(self.recent_global_costs) < 5:
+            return 0.0
+        
+        # Linear trend over recent costs
+        recent_costs = self.recent_global_costs[-5:]
+        if len(recent_costs) > 1:
+            # Simple: improvement rate = (first - last) / length
+            return (recent_costs[0] - recent_costs[-1]) / len(recent_costs)
+        return 0.0
+    
+    def calculate_activity_level(self):
+        """Calculate fraction of agents that have been active recently"""
+        if not self.agents:
+            return 0.0
+        
+        active_agents = 0
+        for agent in self.agents:
+            if hasattr(agent, 'get_did_flip') and agent.get_did_flip():
+                active_agents += 1
+        
+        return active_agents / len(self.agents)
+    
+    def calculate_convergence_measure(self):
+        """Calculate convergence measure based on cost stability"""
+        if len(self.recent_global_costs) < 3:
+            return 0.0
+        
+        # Standard deviation of recent costs (lower = more converged)
+        return float(np.std(self.recent_global_costs))
+    
+    def reset_episode_features(self):
+        """Reset feature tracking for new episode"""
+        self.recent_global_costs = []
+        self.recent_activity_levels = []
+        # Keep global_features_history for learning across episodes
+    
+    def compute_value_function(self, global_features):
+        """Compute state value using linear value function: V = φ^T * [features, 1]"""
+        # Add bias term (1.0) to features
+        features_with_bias = np.append(global_features, 1.0)
+        
+        # Linear combination: φ^T * [features, bias]
+        value = np.dot(self.value_weights, features_with_bias)
+        
+        return float(value)
+    
+    def update_critic(self, current_features, reward, next_features=None, done=False):
+        """Update value function weights using temporal difference learning"""
+        
+        # Current state value
+        current_value = self.compute_value_function(current_features)
+        
+        # Compute target value
+        if done:
+            target_value = reward
+        else:
+            if next_features is not None:
+                next_value = self.compute_value_function(next_features)
+                target_value = reward + self.gamma * next_value
+            else:
+                target_value = reward  # Fallback if no next state
+        
+        # Temporal difference error
+        td_error = target_value - current_value
+        
+        # Update value weights using gradient descent
+        # ∇φ V = features (for linear model)
+        features_with_bias = np.append(current_features, 1.0)
+        
+        # Value function update: φ ← φ + α * td_error * ∇φ V
+        self.value_weights += self.critic_learning_rate * td_error * features_with_bias
+        
+        # Clamp critic weights to prevent numerical issues
+        self.value_weights = np.clip(self.value_weights, -50.0, 50.0)
+        
+        return td_error  # Return TD error as advantage estimate
+    
+    def get_advantage_estimate(self, current_features, reward, next_features=None, done=False):
+        """Get advantage estimate using TD error from critic"""
+        return self.update_critic(current_features, reward, next_features, done)
 

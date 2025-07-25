@@ -3,7 +3,7 @@ import math
 
 def sigmoid(x):
     """
-    Compute the sigmoid function.
+    Compute the sigmoid function with numerical stability.
 
     Args:
         x (float): Input value
@@ -11,7 +11,16 @@ def sigmoid(x):
     Returns:
         float: Sigmoid of x
     """
-    return 1 / (1 + math.exp(-x))
+    # Clamp x to prevent overflow - sigmoid approaches 0 or 1 beyond these bounds
+    x = max(-500, min(500, x))
+    
+    # Use numerically stable computation
+    if x >= 0:
+        exp_neg_x = math.exp(-x)
+        return 1 / (1 + exp_neg_x)
+    else:
+        exp_x = math.exp(x)
+        return exp_x / (1 + exp_x)
 def compute_advantage(reward, baseline):
     """
     Compute advantage for REINFORCE with baseline.

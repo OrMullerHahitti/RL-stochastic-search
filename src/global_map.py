@@ -295,55 +295,9 @@ def create_standard_experiment(dsa_rl_variant=None):
     return configs
 
 
-# Function to create full experiment with consistent priority config
-def create_full_experiment(dsa_rl_variant=None):
-    """Create full experiment with DSA, MGM using MASTER_CONFIG, plus ALL DSA-RL variants"""
-    if dsa_rl_variant is None:
-        dsa_rl_variant = MASTER_CONFIG["priority_variant"]
-
-    dsa_rl_config = DSA_RL_CONFIGS[dsa_rl_variant]
-    priority_config = dsa_rl_config["agent_mu_config"]
-
-    # For full experiment: DSA and MGM use master config, but include all DSA-RL variants
-    # (DSA-RL variants are allowed to have different priority configs for comparison)
-    configs = (
-        create_dsa_configs(priority_config)
-        + [create_mgm_config(priority_config)]
-        + list(DSA_RL_CONFIGS.values())
-    )
-
-    # Only validate consistency for DSA and MGM (not DSA-RL variants in full experiment)
-    dsa_mgm_configs = create_dsa_configs(priority_config) + [
-        create_mgm_config(priority_config)
-    ]
-    validate_experiment_consistency(dsa_mgm_configs)
-
-    return configs
 
 
-# Function to create minimal experiment with consistent priority config
-def create_minimal_experiment(dsa_rl_variant=None):
-    """Create minimal experiment with one DSA, MGM, and DSA_RL using MASTER_CONFIG priority variant"""
-    if dsa_rl_variant is None:
-        dsa_rl_variant = MASTER_CONFIG["priority_variant"]
 
-    dsa_rl_config = DSA_RL_CONFIGS[dsa_rl_variant]
-    priority_config = dsa_rl_config["agent_mu_config"]
-
-    configs = [
-        create_dsa_configs(priority_config)[1],
-        create_mgm_config(priority_config),
-        dsa_rl_config,
-    ]
-    validate_experiment_consistency(configs)
-    return configs
-
-
-# =============================================================================
-# EXPERIMENT CONFIGURATIONS - AUTO-GENERATED FROM MASTER_CONFIG
-# =============================================================================
-# These are automatically generated using MASTER_CONFIG settings
-# WARNING: Do not modify these - change MASTER_CONFIG instead
 
 # Default experiment configurations - DSA, MGM, and DSA-RL comparison
 STANDARD_EXPERIMENT = DSA_CONFIGS + [MGM_CONFIG, DSA_RL_CONFIG]
