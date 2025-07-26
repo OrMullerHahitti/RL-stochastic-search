@@ -1595,6 +1595,14 @@ def create_learned_policy_dcop(
         
     Returns:
         LearnedPolicyDSA instance
+        :param learned_probabilities:
+        :param current_episode:
+        :param shared_topology:
+        :param agent_priority_config:
+        :param edge_probability:
+        :param domain_size:
+        :param num_agents:
+        :param problem_id:
     """
     # Get defaults from global config if not provided
     config = get_master_config()
