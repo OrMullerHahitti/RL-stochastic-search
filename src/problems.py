@@ -1439,10 +1439,20 @@ class ReinforcementLearningDSA(DCOPBase):
                 local_gains = [agent.get_local_gain() for _ in range(len(agent.episode_data))]
                 
                 # Distribute global rewards proportionally to local gains
-                agent_rewards = distribute_rewards_proportionally(
-                    iteration_rewards[:len(agent.episode_data)], 
-                    local_gains
+                # Use the sum of iteration rewards as global improvement for this agent
+                total_global_improvement = sum(iteration_rewards[:len(agent.episode_data)])
+                
+                # Create dummy changers list for this agent only
+                agent_changers = [agent.id_] * len(agent.episode_data)
+                
+                rewards_dict = distribute_rewards_proportionally(
+                    agent_changers, 
+                    local_gains,
+                    total_global_improvement
                 )
+                
+                # Convert dictionary to list of rewards for this agent
+                agent_rewards = [rewards_dict.get(agent.id_, 0.0) for _ in range(len(agent.episode_data))]
                 
                 # Apply learning update
                 agent.finish_episode(agent_rewards)

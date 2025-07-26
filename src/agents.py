@@ -80,8 +80,8 @@ class Agent(ABC):
         """
         for relation in constraint_relations:
             other_agent = relation.get_other_agent(self)
-            self.neighbor_agent_ids.append(other_agent.id_)
-            self.constraint_tables[other_agent.id_] = relation.cost_table
+            self.neighbor_agent_ids.append(other_agent)
+            self.constraint_tables[other_agent] = relation.cost_table
         
         # Backward compatibility
         self.neighbors_agents_id = self.neighbor_agent_ids
