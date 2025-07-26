@@ -46,9 +46,9 @@ STRATIFIED_PRIORITY_CONFIG = {
     "default_mu": 50,
     "default_sigma": 10,
     "random_stratified": {
-        "high": (15, 80, 20),  # 5 agents, μ=80, σ=20
-        "medium": (15, 50, 20),  # 15 agents, μ=50, σ=5
-        "low": (20, 20, 5),  # 10 agents, μ=20, σ=5
+        "high": (20, 80, 20),  # 20 agents, μ=80, σ=20
+        "medium": (20, 50, 20),  # 20 agents, μ=50, σ=20
+        "low": (20, 20, 5),  # 20 agents, μ=20, σ=5
     },
 }
 
@@ -209,7 +209,7 @@ def should_validate_consistency():
 
 def should_log_phase_transitions():
     """Check if phase transition logging is enabled"""
-    return MASTER_CONFIG["rl_lifecycle"]["log_phase_transitions"]
+    return False  # Disabled to reduce verbosity
 
 def create_test_config_override(**overrides):
     """Create a configuration override for testing with specific parameters"""

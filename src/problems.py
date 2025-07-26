@@ -1480,12 +1480,12 @@ class ReinforcementLearningDSA(DCOPBase):
             self.all_episode_costs.append(episode_costs)
             final_costs = episode_costs  # Keep last episode costs
             
-            # Progress reporting
-            if episode % 10 == 0 or episode == self.num_episodes - 1:
+            # Progress reporting every 5 episodes and final episode
+            if (episode + 1) % 5 == 0 or episode == self.num_episodes - 1:
                 initial_cost = episode_costs[0]
                 final_cost = episode_costs[-1]
                 improvement = initial_cost - final_cost
-                print(f"Episode {episode + 1}/{self.num_episodes}: "
+                print(f"Running episode {episode + 1}/{self.num_episodes}: "
                       f"Initial={initial_cost:.1f}, Final={final_cost:.1f}, "
                       f"Improvement={improvement:.1f}")
         

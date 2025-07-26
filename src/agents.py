@@ -84,8 +84,8 @@ class Agent(ABC):
             self.constraint_tables[other_agent] = relation.cost_table
         
         # Backward compatibility
-        self.neighbors_agents_id = self.neighbor_agent_ids
-        self.constraints = self.constraint_tables
+        # self.neighbors_agents_id = self.neighbor_agent_ids
+        # self.constraints = self.constraint_tables
     
     def calculate_local_cost(self, messages: List[Msg]) -> float:
         """
@@ -117,6 +117,7 @@ class Agent(ABC):
         return total_cost
     
     # Backward compatibility method
+    #TODO: Remove in future versions
     def calc_local_cost(self, msgs):
         """Backward compatibility wrapper for calculate_local_cost."""
         return self.calculate_local_cost(msgs)
