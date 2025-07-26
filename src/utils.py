@@ -64,14 +64,14 @@ def distribute_rewards_proportionally(changers, local_gains, global_improvement)
         return {agent_id: 0 for agent_id in changers}
     
     # Get total positive local gains for proportional distribution
-    total_positive_gain = sum(max(0, local_gains.get(agent_id, 0)) for agent_id in changers)
+    total_positive_gain = sum(max(0, local_gains[agent_id] if agent_id in local_gains else 0) for agent_id in changers)
     
     rewards = {}
     
     if total_positive_gain > 0 and global_improvement > 0:
         # Distribute positive improvement proportionally to positive local gains
         for agent_id in changers:
-            local_gain = max(0, local_gains.get(agent_id, 0))
+            local_gain = max(0, local_gains[agent_id] if agent_id in local_gains else 0)
             proportion = local_gain / total_positive_gain
             rewards[agent_id] = proportion * global_improvement
     elif global_improvement < 0:

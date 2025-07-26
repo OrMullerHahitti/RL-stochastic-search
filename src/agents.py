@@ -1,485 +1,752 @@
-from abc import ABC, abstractmethod
-import random
-from typing import Tuple
+"""
+DCOP Agent Implementations
+
+This module contains all agent implementations for different DCOP algorithms:
+- Standard DSA agents
+- Reinforcement Learning agents (DSA-RL)
+- MGM agents
+- Agents using learned policies
+"""
+
 import math
+import random
+from abc import ABC, abstractmethod
+from typing import List, Dict, Optional, Any, Tuple
+
 import numpy as np
 
-from .global_map import *
-from .utils import  compute_advantage, update_exponential_moving_average,sigmoid
+from .global_map import Msg
+from .utils import compute_advantage, update_exponential_moving_average, sigmoid
 
 
+# =============================================================================
+# ABSTRACT BASE AGENT
+# =============================================================================
 
-# Abstract base class for all agents
 class Agent(ABC):
-
-    def __init__(self,id_, d):
+    """
+    Abstract base class for all DCOP agents.
+    
+    Provides common functionality for variable management, message passing,
+    and constraint handling that all agent types can build upon.
+    """
+    
+    def __init__(self, agent_id: int, domain_size: int):
+        """
+        Initialize base agent.
+        
+        Args:
+            agent_id: Unique identifier for this agent
+            domain_size: Size of the agent's variable domain
+        """
+        # Agent identification and timing
+        self.id_ = agent_id
         self.global_clock = 0
-        self.id_ = id_
+        self.local_clock = 0
+        
+        # Variable and domain management
         self.agent_random = random.Random(self.id_)
-        self.variable = self.agent_random.randint(1, d)
-        self.domain = []
-        for i in range(1,d+1):  self.domain.append(i)  # Initialize domain
-        self.neighbors_agents_id = []
-        self.constraints={}
+        self.variable = self.agent_random.randint(1, domain_size)
+        self.domain = list(range(1, domain_size + 1))
+        
+        # Constraint and neighbor management
+        self.neighbor_agent_ids: List[int] = []
+        self.constraint_tables: Dict[int, Dict] = {}
+        
+        # Message passing infrastructure
         self.inbox = None
         self.outbox = None
-        self.local_clock = 0
-
-    # Set neighbors for the agent
-    def set_neighbors(self,neighbors):
-        for n in neighbors:
-            a_other = n.get_other_agent(self)
-            self.neighbors_agents_id.append(a_other)
-            self.constraints[a_other]=n.cost_table
-
-    # Calculate the local cost based on messages received
-    def calc_local_cost(self, msgs):
-        local_cost = 0
-        for msg in msgs:
-            other_agent_id = msg.sender
-            constraint = self.constraints[other_agent_id]
-            if self.id_ < other_agent_id:
-                cost = constraint[((str(self.id_), self.variable), (str(other_agent_id), msg.information))]
-            else:
-                cost = constraint[((str(other_agent_id), msg.information), (str(self.id_), self.variable))]
-            local_cost += cost
-        return local_cost
-
-    # Initialize the agent (send initial messages)
-    def initialize(self):
-        self.send_msgs()
-
-    # Execute an iteration of the algorithm
-    def execute_iteration(self,global_clock):
-        self.global_clock = global_clock
-        msgs = self.inbox.extract()
-        if len(msgs)!=0:
-            self.local_clock = self.local_clock + 1
-            self.compute(msgs)
-            self.send_msgs()
-
-    # Abstract methods to be implemented by subclasses
-    @abstractmethod
-    def compute(self, msgs): pass
-
-    @abstractmethod
-    def send_msgs(self): pass
-
-
-# Agent class for the DSA algorithm with REINFORCE learning
-class DsaAgentAdaptive(Agent):
-    def __init__(self, id_, d, p0=0.7, learning_rate=0.01, baseline_decay=0.9):
-        super().__init__(id_, d)
         
-        # Linear Actor-Critic parameters  
-        self.num_features = 6  # Number of local features
-        # Initialize policy weights for linear model: p = sigmoid(w^T * features)
-        # Start with very small random weights to prevent initial overflow
-        self.policy_weights = np.random.normal(0, 0.01, self.num_features + 1)  # +1 for bias
+        # Initialize attributes that may be checked dynamically (for backward compatibility)
+        self.neighborhood_context = None  # Will be set by contextual agents
+        self.previous_neighbor_values = {}  # For tracking neighbor activity
+        self.recent_costs = []  # For tracking recent costs
+        self.neighbor_changes = []  # For tracking neighbor activity
+        self.policy_weights = None  # For learning agents
+        self.baseline = 0.0  # For learning agents
+        self.probability = 0.5  # Default probability
+        self.current_features = None  # For feature-based agents
+        self.feature_running_stats = None  # For feature statistics
+        self.learning_rate = 0.01  # Default learning rate
+        self.violation_count = 0  # For constraint violation tracking
+        self.episode_data = []  # For episode tracking in learning agents
+    
+    def set_neighbors(self, constraint_relations: List) -> None:
+        """
+        Set up neighbor relationships and constraint tables.
         
-        # Initialize bias more carefully to achieve p0, but clamp to prevent overflow
-        logit_p0 = math.log(p0 / (1 - p0))
-        self.policy_weights[-1] = max(-5.0, min(5.0, logit_p0))  # Clamp initial bias
+        Args:
+            constraint_relations: List of ConstraintRelation objects involving this agent
+        """
+        for relation in constraint_relations:
+            other_agent = relation.get_other_agent(self)
+            self.neighbor_agent_ids.append(other_agent.id_)
+            self.constraint_tables[other_agent.id_] = relation.cost_table
         
-        self.p = p0  # Starting probability
-        self.learning_rate = learning_rate
-        self.baseline_decay = baseline_decay
-        self.baseline = 0.0  # Exponential moving average baseline
+        # Backward compatibility
+        self.neighbors_agents_id = self.neighbor_agent_ids
+        self.constraints = self.constraint_tables
+    
+    def calculate_local_cost(self, messages: List[Msg]) -> float:
+        """
+        Calculate local constraint cost based on received messages.
         
-        # Episode data collection
-        self.episode_data = []  # Store (gradient, reward) pairs during episode
-        self.current_local_cost = 0
-        
-        # Feature tracking for actor-critic
-        self.previous_local_cost = 0
-        self.recent_costs = []  # Track recent local costs for trend analysis
-        self.neighbor_changes = []  # Track recent neighbor activity
-        self.violation_count = 0
-        self.current_features = None  # Will be set during first compute() call
-
-    def validate_policy_consistency(self, features, context="unknown"):
-        """Validate that stored probability matches linear policy computation"""
-        from .global_map import get_testing_parameters
-        testing_params = get_testing_parameters()
-        epsilon = testing_params["validation_epsilon"]
-        
-        expected_p = self.compute_linear_policy_probability(features)
-        if abs(self.p - expected_p) > epsilon:
-            error_msg = (f"Agent {self.id_} policy INCONSISTENCY at {context}: "
-                        f"stored_p={self.p:.6f}, expected_p={expected_p:.6f}, "
-                        f"error={abs(self.p - expected_p):.2e}")
-            raise ValueError(error_msg)
-        return True
-
-    # Compute the new variable value based on messages received
-    def compute(self, msgs):
-        # Extract local features for linear policy
-        # Use a reasonable max_iterations estimate (will be more accurate in DCOP context)
-        max_iterations = 100  # Default fallback, can be improved with DCOP context
-        features = self.extract_local_features(msgs, self.global_clock, max_iterations)
-        
-        # Update probability using linear policy: p = sigmoid(w^T * features)
-        self.p = self.compute_linear_policy_probability(features)
-        
-        # Store features for learning (will be used in gradient calculation)
-        self.current_features = features
-        
-        self.current_local_cost = self.calc_local_cost(msgs)
-        min_possible_local_cost = self.current_local_cost  # Initialize minimum cost with current local cost
-        best_local_variable = self.variable  # Initialize the best variable index with current variable index
-
-        # Loop over all possible variables - try to minimize the estimated local cost for the choice of variable
-        for variable in self.domain:
-            current_variable_costs = 0
-            for msg in msgs:
-                other_agent_id= msg.sender
-                constraint = self.constraints[other_agent_id]
-                # The keys to the constraint dictionary are built in a way that the agent with the lower ID comes
-                # first inside of it
-                if self.id_<other_agent_id:
-                    cost = constraint[((str(self.id_), variable), (str(other_agent_id), msg.information))]
-                else:
-                    cost = constraint[((str(other_agent_id), msg.information), (str(self.id_), variable))]
-                current_variable_costs += cost
-            # update min_possible_local_cost and best_local_variable in case a better local variable was found
-            if current_variable_costs < min_possible_local_cost:
-                min_possible_local_cost = current_variable_costs
-                best_local_variable = variable
-
-        # Decision making and gradient collection for linear policy
-        did_flip = False
-        if min_possible_local_cost < self.current_local_cost:
-            # Make decision to flip or not (probability already updated above)
-            if self.agent_random.random() < self.p:
-                self.variable = best_local_variable
-                did_flip = True
-                
-        # Calculate gradient of log policy for linear model
-        # ∇w log π = features * (action - p) where action=1 if flipped, 0 if not
-        features_with_bias = np.append(self.current_features, 1.0)
-        if did_flip:
-            # ∇w log π(flip|s) = features * (1 - p)
-            gradient_weights = features_with_bias * (1 - self.p)
-        else:
-            # ∇w log π(no-flip|s) = features * (0 - p) = features * (-p)
-            gradient_weights = features_with_bias * (-self.p)
+        Args:
+            messages: Messages from neighboring agents
             
-        # Store gradient and episode data for reward calculation later
-        self.episode_data.append({
-            'gradient_weights': gradient_weights,
-            'did_flip': did_flip,
-            'beginning_iteration_local_cost': self.current_local_cost,
-            'features': self.current_features.copy()
-        })
-
-    # Send messages to all neighbors
-    def send_msgs(self):
-        for n in self.neighbors_agents_id:
-            message = Msg(self.id_, n, self.variable)
-            self.outbox.insert([message])
-    
-    def get_local_gain(self):
-        """Calculate local gain from the last decision"""
-        if len(self.episode_data)>1:
-            last_data,one_before_last = self.episode_data[-1]["beginning_iteration_local_cost"],self.episode_data[-2]["beginning_iteration_local_cost"]
-            return last_data - one_before_last
-        return 0
-    
-    def get_did_flip(self):
-        """Check if agent flipped in the last iteration"""
-        if self.episode_data:
-            return self.episode_data[-1]['did_flip']
-        return False
-    
-    def count_violations(self, msgs=None):
-        """Count the number of constraint violations involving this agent"""
-        if not msgs:
-            return self.violation_count
+        Returns:
+            Total local constraint cost
+        """
+        total_cost = 0.0
         
-        violations = 0
-        for msg in msgs:
+        for msg in messages:
             other_agent_id = msg.sender
             other_variable = msg.information
             
-            # Check if this creates a constraint violation
-            if self.variable == other_variable:  # Same color = violation in graph coloring
+            constraint_table = self.constraint_tables[other_agent_id]
+            
+            # Create key with consistent ordering (lower ID first)
+            if self.id_ < other_agent_id:
+                key = ((str(self.id_), self.variable), (str(other_agent_id), other_variable))
+            else:
+                key = ((str(other_agent_id), other_variable), (str(self.id_), self.variable))
+            
+            cost = constraint_table[key] if key in constraint_table else 0.0
+            total_cost += cost
+        
+        return total_cost
+    
+    # Backward compatibility method
+    def calc_local_cost(self, msgs):
+        """Backward compatibility wrapper for calculate_local_cost."""
+        return self.calculate_local_cost(msgs)
+    
+    def find_best_assignment(self, messages: List[Msg]) -> Tuple[int, float]:
+        """
+        Find the variable assignment that minimizes local cost.
+        
+        Args:
+            messages: Messages from neighboring agents
+            
+        Returns:
+            Tuple of (best_variable, minimum_cost)
+        """
+        current_cost = self.calculate_local_cost(messages)
+        best_variable = self.variable
+        min_cost = current_cost
+        
+        # Try all possible variable values
+        for candidate_variable in self.domain:
+            # Temporarily set variable to calculate cost
+            original_variable = self.variable
+            self.variable = candidate_variable
+            
+            candidate_cost = self.calculate_local_cost(messages)
+            
+            if candidate_cost < min_cost:
+                min_cost = candidate_cost
+                best_variable = candidate_variable
+            
+            # Restore original variable
+            self.variable = original_variable
+        
+        return best_variable, min_cost
+    
+    def initialize(self) -> None:
+        """Initialize agent by sending initial messages."""
+        self.send_messages()
+    
+    def execute_iteration(self, global_clock: int) -> None:
+        """
+        Execute one iteration of the agent's algorithm.
+        
+        Args:
+            global_clock: Current global time step
+        """
+        self.global_clock = global_clock
+        messages = self.inbox.extract()
+        
+        if messages:
+            self.local_clock += 1
+            self.compute(messages)
+            self.send_messages()
+    
+    def execute_iteration_with_context(self, global_clock: int, global_context: Optional[Dict] = None) -> None:
+        """
+        Execute iteration with global context (for contextual learning agents).
+        
+        Args:
+            global_clock: Current global time step
+            global_context: Global problem context for contextual decision making
+        """
+        self.global_clock = global_clock
+        messages = self.inbox.extract()
+        
+        if messages:
+            self.local_clock += 1
+            
+            if self.is_contextual_agent():
+                self.compute_with_context(messages, global_context)
+            else:
+                self.compute(messages)
+            
+            self.send_messages()
+    
+    # Base methods that can be overridden by subclasses (for backward compatibility)
+    def is_contextual_agent(self):
+        """Check if this agent supports contextual computation."""
+        return self.neighborhood_context is not None
+    
+    def compute_with_context(self, msgs, global_context):
+        """Default implementation for contextual computation - override in contextual agents."""
+        return self.compute(msgs)
+    
+    def get_did_flip(self):
+        """Default implementation - override in learning agents."""
+        return False
+    
+    def get_local_gain(self):
+        """Default implementation - override in learning agents."""
+        return 0
+    
+    def count_violations(self, msgs=None):
+        """Default implementation - override in specific agents."""
+        return 0
+    
+    def finish_episode(self, episode_rewards=None):
+        """Default implementation - override in learning agents."""
+        pass
+    
+    # Backward compatibility methods
+    def send_msgs(self):
+        """Backward compatibility wrapper for send_messages."""
+        return self.send_messages()
+    
+    @abstractmethod
+    def compute(self, messages: List[Msg]) -> None:
+        """
+        Compute new variable assignment based on received messages.
+        Must be implemented by subclasses.
+        """
+        pass
+    
+    @abstractmethod
+    def send_messages(self) -> None:
+        """
+        Send messages to neighboring agents.
+        Must be implemented by subclasses.
+        """
+        pass
+
+
+# =============================================================================
+# DSA AGENTS
+# =============================================================================
+
+class DSAAgent(Agent):
+    """
+    Standard DSA (Distributed Stochastic Algorithm) agent.
+    
+    Makes stochastic decisions to change variables based on a fixed probability.
+    """
+    
+    def __init__(self, agent_id: int, domain_size: int, probability: float):
+        """
+        Initialize DSA agent.
+        
+        Args:
+            agent_id: Unique identifier for this agent
+            domain_size: Size of the agent's variable domain
+            probability: Probability of changing variable when improvement is possible
+        """
+        super().__init__(agent_id, domain_size)
+        self.probability = probability
+        self.p = probability  # Backward compatibility
+    
+    def compute(self, messages: List[Msg]) -> None:
+        """Compute DSA decision with fixed probability."""
+        current_cost = self.calculate_local_cost(messages)
+        best_variable, min_cost = self.find_best_assignment(messages)
+        
+        # Change variable if improvement is possible and probability allows
+        if min_cost < current_cost:
+            if self.agent_random.random() < self.probability:
+                self.variable = best_variable
+    
+    def send_messages(self) -> None:
+        """Send current variable value to all neighbors."""
+        for neighbor_id in self.neighbor_agent_ids:
+            message = Msg(self.id_, neighbor_id, self.variable)
+            self.outbox.insert([message])
+
+
+class LearnedPolicyAgent(Agent):
+    """
+    DSA agent that uses learned probabilities without further learning.
+    
+    Uses probability values learned from previous DSA-RL training runs.
+    """
+    
+    def __init__(
+        self, 
+        agent_id: int, 
+        domain_size: int, 
+        learned_probability: float, 
+        policy_weights: Optional[np.ndarray] = None
+    ):
+        """
+        Initialize agent with learned probability policy.
+        
+        Args:
+            agent_id: Unique identifier for this agent
+            domain_size: Size of the agent's variable domain
+            learned_probability: Probability learned from DSA-RL training
+            policy_weights: Optional policy weights from original learning
+        """
+        super().__init__(agent_id, domain_size)
+        self.probability = learned_probability
+        self.policy_weights = policy_weights
+        self.is_learned_policy = True
+        self.p = learned_probability  # Backward compatibility
+    
+    def compute(self, messages: List[Msg]) -> None:
+        """DSA decision making with learned probability (no learning)."""
+        current_cost = self.calculate_local_cost(messages)
+        best_variable, min_cost = self.find_best_assignment(messages)
+        
+        # Use learned probability for decision making
+        if min_cost < current_cost:
+            if self.agent_random.random() < self.probability:
+                self.variable = best_variable
+    
+    def send_messages(self) -> None:
+        """Send current variable value to all neighbors."""
+        for neighbor_id in self.neighbor_agent_ids:
+            message = Msg(self.id_, neighbor_id, self.variable)
+            self.outbox.insert([message])
+
+
+# =============================================================================
+# REINFORCEMENT LEARNING AGENT
+# =============================================================================
+
+class ReinforcementLearningAgent(Agent):
+    """
+    DSA agent with REINFORCE learning and actor-critic methods.
+    
+    Learns optimal probability policies through reinforcement learning
+    using local features and global context.
+    """
+    
+    def __init__(
+        self, 
+        agent_id: int, 
+        domain_size: int, 
+        initial_probability: float = 0.7,
+        learning_rate: float = 0.01,
+        baseline_decay: float = 0.9
+    ):
+        """
+        Initialize reinforcement learning agent.
+        
+        Args:
+            agent_id: Unique identifier for this agent
+            domain_size: Size of the agent's variable domain
+            initial_probability: Initial probability value
+            learning_rate: Learning rate for policy updates
+            baseline_decay: Decay rate for baseline moving average
+        """
+        super().__init__(agent_id, domain_size)
+        
+        # Linear Actor-Critic parameters
+        self.num_features = 6
+        self.policy_weights = np.random.normal(0, 0.1, self.num_features + 1)  # +1 for bias
+        
+        # Initialize bias for desired initial probability
+        logit_p0 = math.log(initial_probability / (1 - initial_probability))
+        self.policy_weights[-1] = max(-5.0, min(5.0, logit_p0))
+        
+        self.probability = initial_probability
+        self.learning_rate = learning_rate
+        self.baseline_decay = baseline_decay
+        self.baseline = 0.0
+        
+        # Episode data collection for learning
+        self.episode_data: List[Dict] = []
+        self.current_local_cost = 0.0
+        
+        # Feature tracking and normalization
+        self.previous_local_cost = 0.0
+        self.recent_costs: List[float] = []
+        self.neighbor_changes: List[int] = []
+        self.violation_count = 0
+        self.current_features = None
+        
+        # Adaptive feature normalization statistics
+        self.feature_running_stats = {
+            'violations': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1},
+            'improvement': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1},
+            'cost': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1},
+            'gain': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1},
+            'activity': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1}
+        }
+        
+        # Contextual learning parameters
+        self.neighborhood_context = {
+            'neighbor_priorities': {},
+            'local_conflict_density': 0.0,
+            'neighborhood_stability': 0.0
+        }
+        self.global_context_weight = 0.1
+        
+        # Backward compatibility attributes
+        self.p = initial_probability
+    
+    def update_running_stats(self, feature_name: str, value: float) -> None:
+        """Update running statistics for feature normalization."""
+        stats = self.feature_running_stats[feature_name]
+        stats['sum'] += value
+        stats['sum_sq'] += value * value
+        stats['count'] += 1
+        
+        # Update mean and standard deviation
+        stats['mean'] = stats['sum'] / stats['count']
+        if stats['count'] > 1:
+            variance = (stats['sum_sq'] / stats['count']) - (stats['mean'] * stats['mean'])
+            stats['std'] = max(np.sqrt(max(variance, 0)), 0.01)  # Prevent zero std
+    
+    def normalize_with_running_stats(self, feature_name: str, value: float) -> float:
+        """Normalize feature using running statistics."""
+        stats = self.feature_running_stats[feature_name]
+        if stats['count'] < 5:  # Not enough data for reliable stats
+            return np.tanh(value / 100.0)  # Fallback normalization
+        
+        # Z-score normalization with tanh squashing
+        normalized = (value - stats['mean']) / stats['std']
+        return np.tanh(normalized)
+    
+    def extract_local_features(self, messages: List[Msg], current_iteration: int, max_iterations: int) -> np.ndarray:
+        """Extract local state features for policy decision making."""
+        # Update cost tracking
+        self.previous_local_cost = self.current_local_cost
+        self.current_local_cost = self.calculate_local_cost(messages)
+        self.recent_costs.append(self.current_local_cost)
+        
+        if len(self.recent_costs) > 10:
+            self.recent_costs.pop(0)
+        
+        # Feature 1: Constraint violations
+        violations = self.count_violations(messages)
+        
+        # Feature 2: Normalized time
+        time_normalized = current_iteration / max_iterations if max_iterations > 0 else 0.0
+        
+        # Feature 3: Recent improvement
+        recent_improvement = self.calculate_recent_improvement()
+        
+        # Feature 4: Current local cost
+        local_cost = self.current_local_cost
+        
+        # Feature 5: Best potential gain
+        best_gain = self.calculate_best_potential_gain(messages)
+        
+        # Feature 6: Neighbor activity
+        neighbor_activity = self.track_neighbor_activity(messages)
+        
+        # Update and normalize features
+        self.update_running_stats('violations', violations)
+        self.update_running_stats('improvement', recent_improvement)
+        self.update_running_stats('cost', local_cost)
+        self.update_running_stats('gain', best_gain)
+        self.update_running_stats('activity', neighbor_activity)
+        
+        # Create normalized feature vector
+        features = np.array([
+            self.normalize_with_running_stats('violations', violations),
+            time_normalized,
+            self.normalize_with_running_stats('improvement', recent_improvement),
+            self.normalize_with_running_stats('cost', local_cost),
+            self.normalize_with_running_stats('gain', best_gain),
+            self.normalize_with_running_stats('activity', neighbor_activity)
+        ], dtype=np.float32)
+        
+        return features
+    
+    def count_violations(self, messages: List[Msg]) -> int:
+        """Count constraint violations (same color as neighbors)."""
+        violations = 0
+        for msg in messages:
+            if self.variable == msg.information:  # Same color = violation
                 violations += 1
         
         self.violation_count = violations
         return violations
     
-    def track_neighbor_activity(self, msgs):
-        """Track how many neighbors have changed recently"""
+    def calculate_recent_improvement(self) -> float:
+        """Calculate recent cost improvement trend."""
+        if len(self.recent_costs) < 2:
+            return 0.0
+        return self.recent_costs[-2] - self.recent_costs[-1]
+    
+    def calculate_best_potential_gain(self, messages: List[Msg]) -> float:
+        """Calculate potential gain from best possible move."""
+        if not messages:
+            return 0.0
+        
+        current_cost = self.calculate_local_cost(messages)
+        _, min_cost = self.find_best_assignment(messages)
+        
+        return max(0.0, current_cost - min_cost)
+    
+    def track_neighbor_activity(self, messages: List[Msg]) -> float:
+        """Track how many neighbors have changed recently."""
+        current_neighbor_values = {msg.sender: msg.information for msg in messages}
         changed_neighbors = 0
-        current_neighbor_values = {}
         
-        for msg in msgs:
-            current_neighbor_values[msg.sender] = msg.information
-        
-        # Count changes if we have previous data
-        if hasattr(self, 'previous_neighbor_values'):
+        if self.previous_neighbor_values:
             for agent_id, current_value in current_neighbor_values.items():
                 if agent_id in self.previous_neighbor_values:
                     if current_value != self.previous_neighbor_values[agent_id]:
                         changed_neighbors += 1
         
-        # Store for next iteration
         self.previous_neighbor_values = current_neighbor_values.copy()
-        
-        # Track recent activity (sliding window)
         self.neighbor_changes.append(changed_neighbors)
-        if len(self.neighbor_changes) > 5:  # Keep last 5 iterations
+        
+        if len(self.neighbor_changes) > 5:
             self.neighbor_changes.pop(0)
         
-        return changed_neighbors
+        return np.mean(self.neighbor_changes) if self.neighbor_changes else 0.0
     
-    def calculate_recent_improvement(self):
-        """Calculate recent improvement trend"""
-        if len(self.recent_costs) < 2:
-            return 0.0
-        
-        # Simple: difference from previous iteration
-        return self.recent_costs[-2] - self.recent_costs[-1]
-    
-    def extract_local_features(self, msgs, current_iteration, max_iterations):
-        """Extract local state features for actor-critic decision making"""
-        
-        # Update tracking information
-        self.previous_local_cost = self.current_local_cost
-        self.current_local_cost = self.calc_local_cost(msgs)
-        
-        # Update recent costs tracking
-        self.recent_costs.append(self.current_local_cost)
-        if len(self.recent_costs) > 10:  # Keep last 10 iterations
-            self.recent_costs.pop(0)
-        
-        # Feature 1: v_i - number of violations (0 to max_neighbors)
-        violations = self.count_violations(msgs)
-        
-        # Feature 2: t - normalized time (0 to 1)
-        time_norm = current_iteration / max_iterations if max_iterations > 0 else 0.0
-        
-        # Feature 3: δ_i - recent improvement (can be negative)
-        recent_improvement = self.calculate_recent_improvement()
-        
-        # Feature 4: local_cost - current local constraint cost
-        local_cost = self.current_local_cost
-        
-        # Feature 5: best_gain - potential gain from best move
-        best_gain = self.calculate_best_potential_gain(msgs)
-        
-        # Feature 6: neighbor_activity - how many neighbors changed recently
-        neighbor_activity = self.track_neighbor_activity(msgs)
-        recent_neighbor_activity = np.mean(self.neighbor_changes) if self.neighbor_changes else 0.0
-        
-        # Return feature vector
-        features = np.array([
-            violations,
-            time_norm, 
-            recent_improvement,
-            local_cost,
-            best_gain,
-            recent_neighbor_activity
-        ], dtype=np.float32)
-        
-        return features
-    
-    def calculate_best_potential_gain(self, msgs):
-        """Calculate the potential gain from the best possible move"""
-        if not msgs:
-            return 0.0
-        
-        current_cost = self.calc_local_cost(msgs)
-        min_cost = current_cost
-        
-        # Try all possible variable values
-        for variable in self.domain:
-            temp_cost = 0
-            for msg in msgs:
-                other_agent_id = msg.sender
-                constraint = self.constraints[other_agent_id]
-                
-                # Calculate cost for this variable choice
-                if self.id_ < other_agent_id:
-                    cost = constraint[((str(self.id_), variable), (str(other_agent_id), msg.information))]
-                else:
-                    cost = constraint[((str(other_agent_id), msg.information), (str(self.id_), variable))]
-                temp_cost += cost
-            
-            min_cost = min(min_cost, temp_cost)
-        
-        return max(0.0, current_cost - min_cost)  # Potential improvement
-    
-    def compute_linear_policy_probability(self, features):
-        """Compute probability using linear policy: p = sigmoid(w^T * [features, 1])"""
-        # Add bias term (1.0) to features
+    def compute_linear_policy_probability(self, features: np.ndarray, global_context: Optional[Dict] = None) -> float:
+        """Compute probability using linear policy with contextual adjustments."""
         features_with_bias = np.append(features, 1.0)
-        
-        # Linear combination: w^T * [features, bias]  
         linear_output = np.dot(self.policy_weights, features_with_bias)
+        base_probability = sigmoid(linear_output)
         
-        # Apply sigmoid to get probability
-        probability = sigmoid(linear_output)
+        # Apply contextual adjustments if needed
+        return self.apply_contextual_adjustments(base_probability, global_context)
+    
+    def apply_contextual_adjustments(self, base_probability: float, global_context: Optional[Dict] = None) -> float:
+        """Apply contextual adjustments to base probability."""
+        adjusted_prob = base_probability
         
-        return probability
-            
-    def finish_episode(self, episode_rewards):
-        """Update policy weights using actor-critic advantages"""
-        if not self.episode_data:
+        # Neighborhood conflict density adjustment
+        conflict_density = self.neighborhood_context['local_conflict_density']
+        if conflict_density > 0.7:
+            adjusted_prob = min(adjusted_prob * 1.2, 0.95)  # More aggressive
+        elif conflict_density < 0.3:
+            adjusted_prob = max(adjusted_prob * 0.8, 0.05)  # More conservative
+        
+        # Global context adjustment
+        if global_context and 'convergence_pressure' in global_context:
+            pressure = global_context['convergence_pressure']
+            if pressure > 0.8:
+                adjusted_prob = min(adjusted_prob * 1.15, 0.95)  # More decisive
+            elif pressure < 0.2:
+                adjusted_prob = max(adjusted_prob * 0.85, 0.05)  # More exploratory
+        
+        return adjusted_prob
+    
+    def update_neighborhood_context(self, messages: List[Msg]) -> None:
+        """Update contextual information about local neighborhood."""
+        if messages:
+            conflicts = sum(1 for msg in messages if msg.information == self.variable)
+            self.neighborhood_context['local_conflict_density'] = conflicts / len(messages)
+        
+        # Update neighborhood stability
+        if len(self.neighbor_changes) >= 3:
+            recent_changes = self.neighbor_changes[-3:]
+            avg_changes = np.mean(recent_changes)
+            max_possible = len(self.neighbor_agent_ids)
+            stability = 1.0 - (avg_changes / max(max_possible, 1))
+            self.neighborhood_context['neighborhood_stability'] = max(0.0, min(stability, 1.0))
+    
+    def compute(self, messages: List[Msg]) -> None:
+        """Compute decision with reinforcement learning."""
+        # Extract features and update probability
+        max_iterations = 100  # Default fallback
+        features = self.extract_local_features(messages, self.global_clock, max_iterations)
+        self.update_neighborhood_context(messages)
+        self.probability = self.compute_linear_policy_probability(features)
+        self.p = self.probability  # Backward compatibility
+        self.current_features = features
+        
+        # Make DSA decision
+        current_cost = self.calculate_local_cost(messages)
+        best_variable, min_cost = self.find_best_assignment(messages)
+        
+        did_flip = False
+        if min_cost < current_cost:
+            if self.agent_random.random() < self.probability:
+                self.variable = best_variable
+                did_flip = True
+        
+        # Store data for learning
+        features_with_bias = np.append(features, 1.0)
+        if did_flip:
+            gradient_weights = features_with_bias * (1 - self.probability)
+        else:
+            gradient_weights = features_with_bias * (-self.probability)
+        
+        self.episode_data.append({
+            'gradient_weights': gradient_weights,
+            'did_flip': did_flip,
+            'beginning_iteration_local_cost': current_cost,
+            'features': features.copy()
+        })
+    
+    def send_messages(self) -> None:
+        """Send current variable value to all neighbors."""
+        for neighbor_id in self.neighbor_agent_ids:
+            message = Msg(self.id_, neighbor_id, self.variable)
+            self.outbox.insert([message])
+    
+    def finish_episode(self, episode_rewards: Optional[List[float]] = None) -> None:
+        """Update policy weights using actor-critic advantages."""
+        if not self.episode_data or not episode_rewards:
             return
-            
-        # episode_rewards now contains critic-based advantages (TD errors) per iteration
-        # Ensure we have matching lengths
+        
         min_length = min(len(self.episode_data), len(episode_rewards))
         
-        # Apply policy gradient updates using critic-based advantages per iteration
+        # Apply policy gradient updates
         for i in range(min_length):
             data = self.episode_data[i]
-            advantage = episode_rewards[i]  # Critic-based advantage for this iteration
-            
-            # Get gradient for this iteration
+            advantage = episode_rewards[i]
             gradient_weights = data['gradient_weights']
             
-            # Apply gradient clipping per-iteration for stability
-            max_gradient_norm = 1.0  # Smaller per-iteration clipping
+            # Apply gradient clipping for stability
+            max_gradient_norm = 2.0
             gradient_norm = np.linalg.norm(gradient_weights)
             if gradient_norm > max_gradient_norm:
                 gradient_weights = gradient_weights * (max_gradient_norm / gradient_norm)
             
-            # Update policy weights using critic-based advantage
+            # Update policy weights
             self.policy_weights += self.learning_rate * gradient_weights * advantage
-            
-            # Clamp policy weights to prevent numerical overflow in sigmoid
-            self.policy_weights = np.clip(self.policy_weights, -10.0, 10.0)
+            self.policy_weights = np.clip(self.policy_weights, -20.0, 20.0)
         
-        # Keep exponential moving average baseline for monitoring purposes
+        # Update baseline for monitoring
         total_advantage = sum(episode_rewards) if episode_rewards else 0
         self.baseline = update_exponential_moving_average(
             self.baseline, total_advantage, self.baseline_decay
         )
         
-        # Clear episode data for next episode
+        # Clear episode data
         self.episode_data = []
     
+    def get_local_gain(self) -> float:
+        """Calculate local gain from the last decision."""
+        if len(self.episode_data) > 1:
+            last_cost = self.episode_data[-1]["beginning_iteration_local_cost"]
+            previous_cost = self.episode_data[-2]["beginning_iteration_local_cost"]
+            return previous_cost - last_cost
+        return 0
+    
+    def get_did_flip(self) -> bool:
+        """Check if agent flipped in the last iteration."""
+        if self.episode_data:
+            return self.episode_data[-1]['did_flip']
+        return False
 
 
+# =============================================================================
+# MGM AGENT  
+# =============================================================================
 
-
-
-
-# Simple DSA Agent without learning (for backward compatibility)
-class DSA_Agent(Agent):
-    def __init__(self, id_, d, p):
-        super().__init__(id_, d)
-        self.p = p  # Fixed probability threshold
-
-    # Compute the new variable value based on messages received
-    def compute(self, msgs):
-        current_local_cost = self.calc_local_cost(msgs)
-        min_possible_local_cost = current_local_cost  # Initialize minimum cost with current local cost
-        best_local_variable = self.variable  # Initialize the best variable index with current variable index
-
-        # Loop over all possible variables - try to minimize the estimated local cost for the choice of variable
-        for variable in self.domain:
-            current_variable_costs = 0
-            for msg in msgs:
-                other_agent_id= msg.sender
-                constraint = self.constraints[other_agent_id]
-                # The keys to the constraint dictionary are built in a way that the agent with the lower ID comes
-                # first inside of it
-                if self.id_<other_agent_id:
-                    cost = constraint[((str(self.id_), variable), (str(other_agent_id), msg.information))]
-                else:
-                    cost = constraint[((str(other_agent_id), msg.information), (str(self.id_), variable))]
-                current_variable_costs += cost
-            # update min_possible_local_cost and best_local_variable in case a better local variable was found
-            if current_variable_costs < min_possible_local_cost:
-                min_possible_local_cost = current_variable_costs
-                best_local_variable = variable
-
-        # Change variable with probability p if a better min_possible_local_cost was found
-        if min_possible_local_cost < current_local_cost:
-            if self.agent_random.random()<self.p:
-                self.variable = best_local_variable
-
-    # Send messages to all neighbors
-    def send_msgs(self):
-        for n in self.neighbors_agents_id:
-            message = Msg(self.id_, n, self.variable)
-            self.outbox.insert([message])
-
-
-# Agent class for the MGM algorithm
-class MGM_Agent(Agent):
-    def __init__(self, id_, d):
-        super().__init__(id_, d)
-        self.lr = 0  # Local reduction
-        self.lr_potential_variable = self.variable  # Potential variable that leads to max local reduction
-
-
-    def compute(self, msgs):
-        # In odd iterations, the agent calculates its maximum local reduction and identifies the potential variable
-        # that would lead to this maximum reduction in cost.
+class MGMAgent(Agent):
+    """
+    MGM (Maximum Gain Messages) algorithm agent.
+    
+    Uses a two-phase approach: calculate maximum gain, then coordinate
+    with neighbors to avoid conflicts when multiple agents want to change.
+    """
+    
+    def __init__(self, agent_id: int, domain_size: int):
+        """
+        Initialize MGM agent.
+        
+        Args:
+            agent_id: Unique identifier for this agent
+            domain_size: Size of the agent's variable domain
+        """
+        super().__init__(agent_id, domain_size)
+        self.local_reduction = 0.0  # Maximum possible cost reduction
+        self.potential_variable = self.variable  # Variable that achieves max reduction
+        
+        # Backward compatibility attributes
+        self.lr = 0.0
+        self.lr_potential_variable = self.variable
+    
+    def compute(self, messages: List[Msg]) -> None:
+        """Compute MGM decision using two-phase protocol."""
         if self.global_clock % 2 == 1:
-            current_local_cost = self.calc_local_cost(msgs)  # Calculate the current local cost based on messages
-            min_possible_local_cost = current_local_cost
-            best_local_variable = self.variable
-
-            # Loop over all possible variables in the agent's domain to find the one that minimizes the local cost
-            for variable in self.domain:
-                current_costs = 0  # Initialize the cost for the current variable
-                # Calculate the sum of local costs if the agent adopts the current variable
-                for msg in msgs:
-                    other_agent_id= msg.sender
-                    constraint = self.constraints[other_agent_id]
-                    # The keys to the constraint dictionary are built in a way that the agent with the lower ID comes
-                    # first inside of it
-                    if self.id_<other_agent_id:
-                        cost = constraint[((str(self.id_), variable), (str(other_agent_id), msg.information))]
-                    else:
-                        cost = constraint[((str(other_agent_id), msg.information), (str(self.id_), variable))]
-                    current_costs += cost
-                # Update the minimum possible local cost and the best variable if a better one is found
-                if current_costs < min_possible_local_cost:
-                    min_possible_local_cost = current_costs
-                    best_local_variable = variable
-
-            # If a lower local cost is found with a different variable, calculate the local reduction
-            if min_possible_local_cost < current_local_cost:
-                self.lr= current_local_cost- min_possible_local_cost  # Calculate the local reduction
-                # Set the potential variable that achieves this reduction without assigning it to agent variable yet
-                self.lr_potential_variable= best_local_variable
-
-        # In even iterations, the agent checks if it has the greatest local reduction compared to its neighbors
-        # If multiple agents have the same greatest local reduction,
-        # the one with the lowest ID has higher priority to change its variable
+            # Odd iterations: Calculate maximum local reduction
+            self._calculate_maximum_reduction(messages)
         else:
-            flag_greatest_local_lr=True
-            for msg in msgs:
-                neighbor_lr = msg.information
-                if neighbor_lr > self.lr:
-                    flag_greatest_local_lr = False # Another agent has a greater local reduction
-                    self.lr = 0  # Reset the local reduction
-                    break
-                if neighbor_lr == self.lr and self.id_ > msg.sender:
-                    flag_greatest_local_lr = False # Another agent has the same local reduction but a lower ID
-                    self.lr = 0  # Reset the local reduction
-                    break
-            # If the agent has the greatest local reduction, it changes its variable to the potential variable
-            if flag_greatest_local_lr and self.lr > 0:
-                self.variable = self.lr_potential_variable
-                self.lr = 0  # Reset the local reduction
-
-    def send_msgs(self):
-        # In even iterations, Send messages to all neighbors with the agent's current variable
+            # Even iterations: Coordinate with neighbors
+            self._coordinate_change_decision(messages)
+    
+    def _calculate_maximum_reduction(self, messages: List[Msg]) -> None:
+        """Calculate maximum possible cost reduction."""
+        current_cost = self.calculate_local_cost(messages)
+        best_variable, min_cost = self.find_best_assignment(messages)
+        
+        if min_cost < current_cost:
+            self.local_reduction = current_cost - min_cost
+            self.potential_variable = best_variable
+            # Backward compatibility
+            self.lr = self.local_reduction
+            self.lr_potential_variable = self.potential_variable
+        else:
+            self.local_reduction = 0.0
+            self.lr = 0.0
+    
+    def _coordinate_change_decision(self, messages: List[Msg]) -> None:
+        """Coordinate with neighbors to decide if this agent should change."""
+        should_change = True
+        
+        for msg in messages:
+            neighbor_reduction = msg.information
+            
+            # Check if neighbor has greater reduction
+            if neighbor_reduction > self.local_reduction:
+                should_change = False
+                self.local_reduction = 0.0
+                self.lr = 0.0
+                break
+            
+            # Tie-breaking: lower ID wins
+            if neighbor_reduction == self.local_reduction and self.id_ > msg.sender:
+                should_change = False
+                self.local_reduction = 0.0
+                self.lr = 0.0
+                break
+        
+        # Change variable if this agent wins the coordination
+        if should_change and self.local_reduction > 0:
+            self.variable = self.potential_variable
+            self.local_reduction = 0.0
+            self.lr = 0.0
+    
+    def send_messages(self) -> None:
+        """Send messages based on current phase."""
         if self.global_clock % 2 == 0:
-            for n in self.neighbors_agents_id:
-                message = Msg(self.id_, n, self.variable)
+            # Even iterations: Send current variable
+            for neighbor_id in self.neighbor_agent_ids:
+                message = Msg(self.id_, neighbor_id, self.variable)
                 self.outbox.insert([message])
-        # Send messages to all neighbors with the agent's greatest local reduction in odd iterations
-
-        # In odd iterations, Send messages to all neighbors with agent's greatest local reduction
         else:
-            for n in self.neighbors_agents_id:
-                message = Msg(self.id_, n, self.lr)
+            # Odd iterations: Send local reduction
+            for neighbor_id in self.neighbor_agent_ids:
+                message = Msg(self.id_, neighbor_id, self.local_reduction)
                 self.outbox.insert([message])
+
+
+# =============================================================================
+# BACKWARD COMPATIBILITY ALIASES
+# =============================================================================
+
+# Keep old class names for backward compatibility
+DSA_Agent = DSAAgent
+DSA_Agent_Learned = LearnedPolicyAgent
+DsaAgentAdaptive = ReinforcementLearningAgent
+MGM_Agent = MGMAgent

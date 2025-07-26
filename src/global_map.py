@@ -65,17 +65,31 @@ MASTER_CONFIG = {
     # Graph topology parameters - used by ALL algorithms
     # These k values determine edge probability in constraint graphs
     "graph_densities": [0.2, 0.7],  # k values for sparse/dense graphs
-    "agents": 50,  # Number of agents (countries)
-    "domain_size": 20,
+    "default_edge_probability": 0.3,  # Default edge probability when not specified
+    "agents": 60,  # Number of agents (countries) - large scale for meaningful probability learning
+    "domain_size": 12,  # Domain size - balanced for challenging but solvable large-scale problems
     "repetitions": 30,  # Number of repetitions per algorithm
     "iterations": 100,  # Iterations per experiment run or episode length
     
     # DSA-RL specific hyperparameters - centralized single source of truth
     "dsa_rl": {
         "p0": 0.5,  # Initial probability for all agents
-        "learning_rate": 0.005,  # REINFORCE learning rate (α)
+        "learning_rate": 0.005,  # Actor learning rate (reduced for large-scale stability)
         "baseline_decay": 0.99,  # Exponential moving average decay (β)
-        "num_episodes": 30,  # Number of learning episodes (same as repetitions)
+        "num_episodes": 50,  # Number of learning episodes (increased for large-scale learning)
+        "gamma": 0.9,  # Discount factor for future rewards
+        "num_global_features": 6,  # Number of global features for critic
+        "critic_init_std": 0.2,  # Standard deviation for critic weight initialization
+        "baseline_agents": 30,  # Baseline number of agents for scaling
+        "curriculum_easy_threshold": 3,  # Agent-to-color ratio threshold for easy problems
+        "curriculum_medium_threshold": 6,  # Agent-to-color ratio threshold for medium problems
+        "curriculum_progress_ratio": 0.3,  # Fraction of episodes for curriculum ramp-up
+        "curriculum_rate_multipliers": {  # Learning rate multipliers by curriculum stage
+            "easy": 1.2,
+            "medium": 1.0,
+            "hard": 0.8
+        },
+        "critic_weight_clip_bounds": 100.0,  # Bounds for clipping critic weights
     },
     
     # Testing and debugging parameters
@@ -83,6 +97,33 @@ MASTER_CONFIG = {
         "max_cost_iterations": 100,  # Maximum iterations for cost tracking arrays
         "reduced_iterations": 20,  # Reduced iterations for quick testing
         "validation_epsilon": 1e-6,  # Tolerance for mathematical consistency checks
+        "random_seed_offset": 42,  # Seed offset for deterministic random generation
+    },
+    
+    # RL Lifecycle Configuration - Controls learning vs comparison phase behavior
+    "rl_lifecycle": {
+        # Learning Phase: DSA-RL training on varied problem instances
+        "learning_phase": {
+            "vary_penalties": True,          # Allow penalty variation for robust learning
+            "vary_initial_assignments": True, # Allow initial assignment variation  
+            "constant_graph_structure": True, # Always maintain same neighbor relationships
+            "constant_density_functions": True, # Always maintain agent penalty distribution parameters
+            "use_shared_topology": True,     # Use SharedGraphTopology for consistency
+            "mode_name": "learning"          # Mode identifier for SharedGraphTopology
+        },
+        # Comparison Phase: Fair evaluation across all algorithms
+        "comparison_phase": {
+            "vary_penalties": False,         # Fixed penalties across all algorithms per repetition
+            "vary_initial_assignments": False, # Fixed initial assignments across all algorithms per repetition
+            "constant_graph_structure": True, # Always maintain same neighbor relationships
+            "constant_density_functions": True, # Always maintain agent penalty distribution parameters  
+            "use_shared_topology": True,     # Use SharedGraphTopology for consistency
+            "mode_name": "comparison"        # Mode identifier for SharedGraphTopology
+        },
+        # Global lifecycle settings
+        "always_use_synchronized": True,    # Always use synchronized experiments (replaces hardcoded USE_SYNCHRONIZED)
+        "validate_consistency": True,       # Enable validation checks for graph/penalty consistency
+        "log_phase_transitions": True       # Log when switching between learning and comparison phases
     },
 }
 
@@ -146,6 +187,30 @@ def get_testing_parameters():
     """Get testing and debugging parameters from centralized config"""
     return MASTER_CONFIG["testing"].copy()
 
+def get_rl_lifecycle_config():
+    """Get RL lifecycle configuration from centralized config"""
+    return MASTER_CONFIG["rl_lifecycle"].copy()
+
+def get_learning_phase_config():
+    """Get learning phase configuration"""
+    return MASTER_CONFIG["rl_lifecycle"]["learning_phase"].copy()
+
+def get_comparison_phase_config():
+    """Get comparison phase configuration"""
+    return MASTER_CONFIG["rl_lifecycle"]["comparison_phase"].copy()
+
+def should_use_synchronized_experiments():
+    """Check if synchronized experiments should always be used"""
+    return MASTER_CONFIG["rl_lifecycle"]["always_use_synchronized"]
+
+def should_validate_consistency():
+    """Check if consistency validation is enabled"""
+    return MASTER_CONFIG["rl_lifecycle"]["validate_consistency"]
+
+def should_log_phase_transitions():
+    """Check if phase transition logging is enabled"""
+    return MASTER_CONFIG["rl_lifecycle"]["log_phase_transitions"]
+
 def create_test_config_override(**overrides):
     """Create a configuration override for testing with specific parameters"""
     test_config = get_master_config()
@@ -180,7 +245,7 @@ def create_dsa_rl_config(agent_mu_config, override_params=None):
         "iteration_per_episode": MASTER_CONFIG["iterations"],  # Use global iterations
         "num_episodes": dsa_rl_params["num_episodes"],
         "agent_mu_config": agent_mu_config,
-        "name": f'DSA_RL_{agent_mu_config}',
+        "name": f'DSA_RL',
     }
 
 
@@ -199,7 +264,7 @@ def validate_master_config():
     """Validate that MASTER_CONFIG contains all required parameters"""
     required_keys = {
         "priority_variant", "graph_densities", "agents", "domain_size", 
-        "repetitions", "iterations", "dsa_rl", "testing"
+        "repetitions", "iterations", "dsa_rl", "testing", "rl_lifecycle"
     }
     
     missing_keys = required_keys - set(MASTER_CONFIG.keys())
@@ -218,6 +283,24 @@ def validate_master_config():
     if missing_testing_keys:
         raise ValueError(f"MASTER_CONFIG['testing'] missing required keys: {missing_testing_keys}")
     
+    # Validate RL lifecycle parameters
+    required_rl_lifecycle_keys = {"learning_phase", "comparison_phase", "always_use_synchronized", "validate_consistency", "log_phase_transitions"}
+    missing_rl_lifecycle_keys = required_rl_lifecycle_keys - set(MASTER_CONFIG["rl_lifecycle"].keys())
+    if missing_rl_lifecycle_keys:
+        raise ValueError(f"MASTER_CONFIG['rl_lifecycle'] missing required keys: {missing_rl_lifecycle_keys}")
+    
+    # Validate learning phase parameters
+    required_learning_keys = {"vary_penalties", "vary_initial_assignments", "constant_graph_structure", "constant_density_functions", "use_shared_topology", "mode_name"}
+    missing_learning_keys = required_learning_keys - set(MASTER_CONFIG["rl_lifecycle"]["learning_phase"].keys())
+    if missing_learning_keys:
+        raise ValueError(f"MASTER_CONFIG['rl_lifecycle']['learning_phase'] missing required keys: {missing_learning_keys}")
+    
+    # Validate comparison phase parameters
+    required_comparison_keys = {"vary_penalties", "vary_initial_assignments", "constant_graph_structure", "constant_density_functions", "use_shared_topology", "mode_name"}
+    missing_comparison_keys = required_comparison_keys - set(MASTER_CONFIG["rl_lifecycle"]["comparison_phase"].keys())
+    if missing_comparison_keys:
+        raise ValueError(f"MASTER_CONFIG['rl_lifecycle']['comparison_phase'] missing required keys: {missing_comparison_keys}")
+    
     return True
 
 def get_current_experiment_config():
@@ -232,6 +315,7 @@ def get_current_experiment_config():
         "iterations": MASTER_CONFIG["iterations"],
         "dsa_rl": MASTER_CONFIG["dsa_rl"],
         "testing": MASTER_CONFIG["testing"],
+        "rl_lifecycle": MASTER_CONFIG["rl_lifecycle"],
     }
 
 
@@ -255,8 +339,20 @@ def print_master_config():
     print("Testing Parameters:")
     for key, value in config['testing'].items():
         print(f"  {key}:        {value}")
+    print()
+    print("RL Lifecycle Configuration:")
+    print(f"  Always Use Synchronized: {config['rl_lifecycle']['always_use_synchronized']}")
+    print(f"  Validate Consistency:    {config['rl_lifecycle']['validate_consistency']}")
+    print(f"  Log Phase Transitions:   {config['rl_lifecycle']['log_phase_transitions']}")
+    print("  Learning Phase:")
+    for key, value in config['rl_lifecycle']['learning_phase'].items():
+        print(f"    {key}:   {value}")
+    print("  Comparison Phase:")
+    for key, value in config['rl_lifecycle']['comparison_phase'].items():
+        print(f"    {key}: {value}")
     print("=" * 80)
     print("All algorithms (DSA, MGM, DSA-RL) will use these EXACT parameters")
+    print("RL learning and comparison phases are now explicitly controlled")
     print("=" * 80)
 
 
