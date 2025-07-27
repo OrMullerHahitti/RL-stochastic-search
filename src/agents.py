@@ -343,7 +343,7 @@ class ReinforcementLearningAgent(Agent):
         self, 
         agent_id: int, 
         domain_size: int, 
-        initial_probability: float = 0.7,
+        initial_probability: float = 0.9,
         learning_rate: float = 0.01,
         baseline_decay: float = 0.9
     ):
