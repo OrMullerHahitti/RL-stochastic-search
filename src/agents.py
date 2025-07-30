@@ -371,6 +371,7 @@ class ReinforcementLearningAgent(Agent):
         self.learning_rate = learning_rate
         self.baseline_decay = baseline_decay
         self.baseline = 0.0
+        self.episode_features = {}
         
         # Episode data collection for learning
         self.episode_data: List[Dict] = []
@@ -518,16 +519,16 @@ class ReinforcementLearningAgent(Agent):
         
         return np.mean(self.neighbor_changes) if self.neighbor_changes else 0.0
     
-    def compute_linear_policy_probability(self, features: np.ndarray, global_context: Optional[Dict] = None) -> float:
+    def compute_linear_policy_probability(self, features: np.ndarray) -> float:
         """Compute probability using linear policy with contextual adjustments."""
         features_with_bias = np.append(features, 1.0)
         linear_output = np.dot(self.policy_weights, features_with_bias)
         base_probability = sigmoid(linear_output)
         
-        # Apply contextual adjustments if needed
-        return self.apply_contextual_adjustments(base_probability, global_context)
+        # Apply contextual adjustments
+        return self.adjust_probability(base_probability)
     
-    def apply_contextual_adjustments(self, base_probability: float, global_context: Optional[Dict] = None) -> float:
+    def adjust_probability(self, base_probability: float) -> float:
         """Apply contextual adjustments to base probability."""
         adjusted_prob = base_probability
         
@@ -537,14 +538,6 @@ class ReinforcementLearningAgent(Agent):
             adjusted_prob = min(adjusted_prob * 1.2, 0.95)  # More aggressive
         elif conflict_density < 0.3:
             adjusted_prob = max(adjusted_prob * 0.8, 0.05)  # More conservative
-        
-        # Global context adjustment
-        if global_context and 'convergence_pressure' in global_context:
-            pressure = global_context['convergence_pressure']
-            if pressure > 0.8:
-                adjusted_prob = min(adjusted_prob * 1.15, 0.95)  # More decisive
-            elif pressure < 0.2:
-                adjusted_prob = max(adjusted_prob * 0.85, 0.05)  # More exploratory
         
         return adjusted_prob
     
@@ -559,17 +552,17 @@ class ReinforcementLearningAgent(Agent):
             recent_changes = self.neighbor_changes[-3:]
             avg_changes = np.mean(recent_changes)
             max_possible = len(self.neighbor_agent_ids)
-            stability = 1.0 - (avg_changes / max(max_possible, 1))
-            self.neighborhood_context['neighborhood_stability'] = max(0.0, min(stability, 1.0))
+            stability = 1.0 - (avg_changes / max(max_possible, 1)) #Fallback to number of neighbors == 0
+            self.neighborhood_context['neighborhood_stability'] = stability
     
     def compute(self, messages: List[Msg]) -> None:
         """Compute decision with reinforcement learning."""
         # Extract features and update probability
         max_iterations = 100  # Default fallback
         features = self.extract_local_features(messages, self.global_clock, max_iterations)
+        self.episode_features[self.local_clock] = features
         self.update_neighborhood_context(messages)
-        self.probability = self.compute_linear_policy_probability(features)
-        self.p = self.probability  # Backward compatibility
+
         self.current_features = features
         
         # Make DSA decision
@@ -608,22 +601,18 @@ class ReinforcementLearningAgent(Agent):
             return
         
         min_length = min(len(self.episode_data), len(episode_rewards))
-        
+
+
         # Apply policy gradient updates
         for i in range(min_length):
             data = self.episode_data[i]
             advantage = episode_rewards[i]
             gradient_weights = data['gradient_weights']
-            
-            # Apply gradient clipping for stability
-            max_gradient_norm = 2.0
-            gradient_norm = np.linalg.norm(gradient_weights)
-            if gradient_norm > max_gradient_norm:
-                gradient_weights = gradient_weights * (max_gradient_norm / gradient_norm)
-            
-            # Update policy weights
+
             self.policy_weights += self.learning_rate * gradient_weights * advantage
             self.policy_weights = np.clip(self.policy_weights, -20.0, 20.0)
+            base_probability = self.compute_linear_policy_probability(self.episode_features[i])
+            self.p = sigmoid(base_probability)
         
         # Update baseline for monitoring
         total_advantage = sum(episode_rewards) if episode_rewards else 0
@@ -633,6 +622,8 @@ class ReinforcementLearningAgent(Agent):
         
         # Clear episode data
         self.episode_data = []
+        self.episode_features = {}
+        self.local_clock = 0
     
     def get_local_gain(self) -> float:
         """Calculate local gain from the last decision."""

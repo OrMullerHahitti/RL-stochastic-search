@@ -75,12 +75,12 @@ MASTER_CONFIG = {
     "dsa_rl": {
         "p0": 0.75,  # Initial probability for all agents
         "learning_rate": 0.005,  # Actor learning rate (reduced for large-scale stability)
-        "baseline_decay": 0.99,  # Exponential moving average decay (β)
+        "baseline_decay": 0.99,  # Exponential moving average decay (bethe)
         "num_episodes": 50,  # Number of learning episodes (increased for large-scale learning)
         "gamma": 0.9,  # Discount factor for future rewards
         "num_global_features": 6,  # Number of global features for critic
         "critic_init_std": 0.2,  # Standard deviation for critic weight initialization
-        "baseline_agents": 30,  # Baseline number of agents for scaling
+        "baseline_agents": 60,  # Baseline number of agents for scaling
         "curriculum_easy_threshold": 3,  # Agent-to-color ratio threshold for easy problems
         "curriculum_medium_threshold": 6,  # Agent-to-color ratio threshold for medium problems
         "curriculum_progress_ratio": 0.3,  # Fraction of episodes for curriculum ramp-up
