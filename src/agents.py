@@ -334,22 +334,22 @@ class LearnedPolicyAgent(Agent):
 class ReinforcementLearningAgent(Agent):
     """
     DSA agent with REINFORCE learning and actor-critic methods.
-    
+
     Learns optimal probability policies through reinforcement learning
     using local features and global context.
     """
-    
+
     def __init__(
-        self, 
-        agent_id: int, 
-        domain_size: int, 
+        self,
+        agent_id: int,
+        domain_size: int,
         initial_probability: float = 0.9,
         learning_rate: float = 0.01,
         baseline_decay: float = 0.9
     ):
         """
         Initialize reinforcement learning agent.
-        
+
         Args:
             agent_id: Unique identifier for this agent
             domain_size: Size of the agent's variable domain
@@ -358,32 +358,32 @@ class ReinforcementLearningAgent(Agent):
             baseline_decay: Decay rate for baseline moving average
         """
         super().__init__(agent_id, domain_size)
-        
+
         # Linear Actor-Critic parameters
         self.num_features = 6
         self.policy_weights = np.random.normal(0, 0.1, self.num_features + 1)  # +1 for bias
-        
+
         # Initialize bias for desired initial probability
         logit_p0 = math.log(initial_probability / (1 - initial_probability))
         self.policy_weights[-1] = max(-5.0, min(5.0, logit_p0))
-        
+
         self.probability = initial_probability
         self.learning_rate = learning_rate
         self.baseline_decay = baseline_decay
         self.baseline = 0.0
         self.episode_features = {}
-        
+
         # Episode data collection for learning
         self.episode_data: List[Dict] = []
         self.current_local_cost = 0.0
-        
+
         # Feature tracking and normalization
         self.previous_local_cost = 0.0
         self.recent_costs: List[float] = []
         self.neighbor_changes: List[int] = []
         self.violation_count = 0
         self.current_features = None
-        
+
         # Adaptive feature normalization statistics
         self.feature_running_stats = {
             'violations': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1},
@@ -392,7 +392,7 @@ class ReinforcementLearningAgent(Agent):
             'gain': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1},
             'activity': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1}
         }
-        
+
         # Contextual learning parameters
         self.neighborhood_context = {
             'neighbor_priorities': {},
@@ -400,68 +400,68 @@ class ReinforcementLearningAgent(Agent):
             'neighborhood_stability': 0.0
         }
         self.global_context_weight = 0.1
-        
+
         # Backward compatibility attributes
         self.p = initial_probability
-    
+
     def update_running_stats(self, feature_name: str, value: float) -> None:
         """Update running statistics for feature normalization."""
         stats = self.feature_running_stats[feature_name]
         stats['sum'] += value
         stats['sum_sq'] += value * value
         stats['count'] += 1
-        
+
         # Update mean and standard deviation
         stats['mean'] = stats['sum'] / stats['count']
         if stats['count'] > 1:
             variance = (stats['sum_sq'] / stats['count']) - (stats['mean'] * stats['mean'])
             stats['std'] = max(np.sqrt(max(variance, 0)), 0.01)  # Prevent zero std
-    
+
     def normalize_with_running_stats(self, feature_name: str, value: float) -> float:
         """Normalize feature using running statistics."""
         stats = self.feature_running_stats[feature_name]
         if stats['count'] < 5:  # Not enough data for reliable stats
             return np.tanh(value / 100.0)  # Fallback normalization
-        
+
         # Z-score normalization with tanh squashing
         normalized = (value - stats['mean']) / stats['std']
         return np.tanh(normalized)
-    
+
     def extract_local_features(self, messages: List[Msg], current_iteration: int, max_iterations: int) -> np.ndarray:
         """Extract local state features for policy decision making."""
         # Update cost tracking
         self.previous_local_cost = self.current_local_cost
         self.current_local_cost = self.calculate_local_cost(messages)
         self.recent_costs.append(self.current_local_cost)
-        
+
         if len(self.recent_costs) > 10:
             self.recent_costs.pop(0)
-        
+
         # Feature 1: Constraint violations
         violations = self.count_violations(messages)
-        
+
         # Feature 2: Normalized time
         time_normalized = current_iteration / max_iterations if max_iterations > 0 else 0.0
-        
+
         # Feature 3: Recent improvement
         recent_improvement = self.calculate_recent_improvement()
-        
+
         # Feature 4: Current local cost
         local_cost = self.current_local_cost
-        
+
         # Feature 5: Best potential gain
         best_gain = self.calculate_best_potential_gain(messages)
-        
+
         # Feature 6: Neighbor activity
         neighbor_activity = self.track_neighbor_activity(messages)
-        
+
         # Update and normalize features
         self.update_running_stats('violations', violations)
         self.update_running_stats('improvement', recent_improvement)
         self.update_running_stats('cost', local_cost)
         self.update_running_stats('gain', best_gain)
         self.update_running_stats('activity', neighbor_activity)
-        
+
         # Create normalized feature vector
         features = np.array([
             self.normalize_with_running_stats('violations', violations),
@@ -471,82 +471,82 @@ class ReinforcementLearningAgent(Agent):
             self.normalize_with_running_stats('gain', best_gain),
             self.normalize_with_running_stats('activity', neighbor_activity)
         ], dtype=np.float32)
-        
+
         return features
-    
+
     def count_violations(self, messages: List[Msg]) -> int:
         """Count constraint violations (same color as neighbors)."""
         violations = 0
         for msg in messages:
             if self.variable == msg.information:  # Same color = violation
                 violations += 1
-        
+
         self.violation_count = violations
         return violations
-    
+
     def calculate_recent_improvement(self) -> float:
         """Calculate recent cost improvement trend."""
         if len(self.recent_costs) < 2:
             return 0.0
         return self.recent_costs[-2] - self.recent_costs[-1]
-    
+
     def calculate_best_potential_gain(self, messages: List[Msg]) -> float:
         """Calculate potential gain from best possible move."""
         if not messages:
             return 0.0
-        
+
         current_cost = self.calculate_local_cost(messages)
         _, min_cost = self.find_best_assignment(messages)
-        
+
         return max(0.0, current_cost - min_cost)
-    
+
     def track_neighbor_activity(self, messages: List[Msg]) -> float:
         """Track how many neighbors have changed recently."""
         current_neighbor_values = {msg.sender: msg.information for msg in messages}
         changed_neighbors = 0
-        
+
         if self.previous_neighbor_values:
             for agent_id, current_value in current_neighbor_values.items():
                 if agent_id in self.previous_neighbor_values:
                     if current_value != self.previous_neighbor_values[agent_id]:
                         changed_neighbors += 1
-        
+
         self.previous_neighbor_values = current_neighbor_values.copy()
         self.neighbor_changes.append(changed_neighbors)
-        
+
         if len(self.neighbor_changes) > 5:
             self.neighbor_changes.pop(0)
-        
+
         return np.mean(self.neighbor_changes) if self.neighbor_changes else 0.0
-    
+
     def compute_linear_policy_probability(self, features: np.ndarray) -> float:
         """Compute probability using linear policy with contextual adjustments."""
         features_with_bias = np.append(features, 1.0)
         linear_output = np.dot(self.policy_weights, features_with_bias)
         base_probability = sigmoid(linear_output)
-        
+
         # Apply contextual adjustments
         return self.adjust_probability(base_probability)
-    
+
     def adjust_probability(self, base_probability: float) -> float:
         """Apply contextual adjustments to base probability."""
         adjusted_prob = base_probability
-        
+
         # Neighborhood conflict density adjustment
         conflict_density = self.neighborhood_context['local_conflict_density']
         if conflict_density > 0.7:
             adjusted_prob = min(adjusted_prob * 1.2, 0.95)  # More aggressive
         elif conflict_density < 0.3:
             adjusted_prob = max(adjusted_prob * 0.8, 0.05)  # More conservative
-        
+
         return adjusted_prob
-    
+
     def update_neighborhood_context(self, messages: List[Msg]) -> None:
         """Update contextual information about local neighborhood."""
         if messages:
             conflicts = sum(1 for msg in messages if msg.information == self.variable)
             self.neighborhood_context['local_conflict_density'] = conflicts / len(messages)
-        
+
         # Update neighborhood stability
         if len(self.neighbor_changes) >= 3:
             recent_changes = self.neighbor_changes[-3:]
@@ -554,7 +554,7 @@ class ReinforcementLearningAgent(Agent):
             max_possible = len(self.neighbor_agent_ids)
             stability = 1.0 - (avg_changes / max(max_possible, 1)) #Fallback to number of neighbors == 0
             self.neighborhood_context['neighborhood_stability'] = stability
-    
+
     def compute(self, messages: List[Msg]) -> None:
         """Compute decision with reinforcement learning."""
         # Extract features and update probability
@@ -564,42 +564,42 @@ class ReinforcementLearningAgent(Agent):
         self.update_neighborhood_context(messages)
 
         self.current_features = features
-        
+
         # Make DSA decision
         current_cost = self.calculate_local_cost(messages)
         best_variable, min_cost = self.find_best_assignment(messages)
-        
+
         did_flip = False
         if min_cost < current_cost:
             if self.agent_random.random() < self.probability:
                 self.variable = best_variable
                 did_flip = True
-        
+
         # Store data for learning
         features_with_bias = np.append(features, 1.0)
         if did_flip:
             gradient_weights = features_with_bias * (1 - self.probability)
         else:
             gradient_weights = features_with_bias * (-self.probability)
-        
+
         self.episode_data.append({
             'gradient_weights': gradient_weights,
             'did_flip': did_flip,
             'beginning_iteration_local_cost': current_cost,
             'features': features.copy()
         })
-    
+
     def send_messages(self) -> None:
         """Send current variable value to all neighbors."""
         for neighbor_id in self.neighbor_agent_ids:
             message = Msg(self.id_, neighbor_id, self.variable)
             self.outbox.insert([message])
-    
+
     def finish_episode(self, episode_rewards: Optional[List[float]] = None) -> None:
         """Update policy weights using actor-critic advantages."""
         if not self.episode_data or not episode_rewards:
             return
-        
+
         min_length = min(len(self.episode_data), len(episode_rewards))
 
 
@@ -613,18 +613,18 @@ class ReinforcementLearningAgent(Agent):
             self.policy_weights = np.clip(self.policy_weights, -20.0, 20.0)
             base_probability = self.compute_linear_policy_probability(self.episode_features[i])
             self.p = sigmoid(base_probability)
-        
+
         # Update baseline for monitoring
         total_advantage = sum(episode_rewards) if episode_rewards else 0
         self.baseline = update_exponential_moving_average(
             self.baseline, total_advantage, self.baseline_decay
         )
-        
+
         # Clear episode data
         self.episode_data = []
         self.episode_features = {}
         self.local_clock = 0
-    
+
     def get_local_gain(self) -> float:
         """Calculate local gain from the last decision."""
         if len(self.episode_data) > 1:
@@ -632,7 +632,7 @@ class ReinforcementLearningAgent(Agent):
             previous_cost = self.episode_data[-2]["beginning_iteration_local_cost"]
             return previous_cost - last_cost
         return 0
-    
+
     def get_did_flip(self) -> bool:
         """Check if agent flipped in the last iteration."""
         if self.episode_data:
