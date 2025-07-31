@@ -141,7 +141,7 @@ class DCOPBase(ABC):
         problem_name: str,
         algorithm: Algorithm,
         edge_probability: float,
-        probability: Optional[float] = None,
+        p: Optional[float] = None,
         agent_priority_config: Optional[Dict[str, Any]] = None,
         shared_topology: Optional[SharedGraphTopology] = None,
         current_episode: int = 0
@@ -151,7 +151,7 @@ class DCOPBase(ABC):
         self.num_agents = num_agents
         self.domain_size = domain_size
         self.edge_probability = edge_probability
-        self.probability = probability
+        self.p = p
         self.algorithm = algorithm
         self.problem_name = problem_name
         
@@ -306,14 +306,14 @@ class StandardDSA(DCOPBase):
     """
     Standard DSA (Distributed Stochastic Algorithm) implementation.
     
-    Agents make stochastic decisions to change variables based on a fixed probability.
+    Agents make stochastic decisions to change variables based on a fixed p.
     """
     
     def create_agents(self) -> None:
-        """Create DSA agents with fixed probability."""
+        """Create DSA agents with fixed p."""
         for i in range(self.num_agents):
             agent_id = i + 1
-            agent = DSAAgent(agent_id, self.domain_size, self.probability)
+            agent = DSAAgent(agent_id, self.domain_size, self.p)
             self.agents.append(agent)
     
     def execute(self) -> List[float]:
@@ -342,7 +342,7 @@ class StandardDSA(DCOPBase):
 
 class LearnedPolicyDSA(DCOPBase):
     """
-    DSA implementation using learned probability policies.
+    DSA implementation using learned p policies.
     
     Uses probabilities learned from previous DSA-RL training without further learning.
     """
@@ -399,7 +399,7 @@ class LearnedPolicyDSA(DCOPBase):
     
     def get_agent_probabilities(self) -> Dict[int, float]:
         """Get the probabilities being used by all agents."""
-        return {agent.id_: agent.probability for agent in self.agents}
+        return {agent.id_: agent.p for agent in self.agents}
 
 
 class MaximumGainMessages(DCOPBase):
@@ -445,7 +445,7 @@ class ReinforcementLearningDSA(DCOPBase):
     """
     DSA with REINFORCE learning implementation.
     
-    Agents learn optimal probability policies through reinforcement learning
+    Agents learn optimal p policies through reinforcement learning
     using actor-critic methods with local and global features.
     """
     
@@ -468,7 +468,7 @@ class ReinforcementLearningDSA(DCOPBase):
     ):
         self.initial_probability = initial_probability
         self.learning_rate = learning_rate
-        self.baseline_decay = baseline_decay
+        self.decay_factor = baseline_decay
         self.iterations_per_episode = iterations_per_episode
         self.num_episodes = num_episodes
         
@@ -487,11 +487,11 @@ class ReinforcementLearningDSA(DCOPBase):
             agent_id = i + 1
             agent = ReinforcementLearningAgent(
                 agent_id, self.domain_size, self.initial_probability,
-                self.learning_rate, self.baseline_decay
+                self.learning_rate, self.decay_factor
             )
             self.agents.append(agent)
             
-            # Initialize probability tracking
+            # Initialize p tracking
             self.probability_evolution[agent_id] = []
     
     def execute_single_episode(self, episode_num: int) -> List[float]:
@@ -501,8 +501,7 @@ class ReinforcementLearningDSA(DCOPBase):
         # Reset episode data and start new episode for all agents
         for agent in self.agents:
             agent.episode_data = []
-            if hasattr(agent, 'start_new_episode'):
-                agent.start_new_episode()
+
         
         # Record initial cost
         initial_cost = self.calculate_global_cost()
@@ -510,10 +509,10 @@ class ReinforcementLearningDSA(DCOPBase):
         
         # DIAGNOSTIC: Check episode setup
         if episode_num < 3 or episode_num % 10 == 0:  # Log first few episodes and every 10th
-            agent_probs = [getattr(agent, 'episode_probability', getattr(agent, 'probability', 'N/A'))
-                          for agent in self.agents if hasattr(agent, 'probability')]
+            agent_probs = [getattr(agent, 'p', getattr(agent, 'p', 'N/A'))
+                          for agent in self.agents if hasattr(agent, 'p')]
             avg_prob = sum(p for p in agent_probs if isinstance(p, (int, float))) / len(agent_probs) if agent_probs else 0
-            print(f"Episode {episode_num}: Initial cost={initial_cost:.1f}, Avg probability={avg_prob:.3f}")
+            print(f"Episode {episode_num}: Initial cost={initial_cost:.1f}, Avg p={avg_prob:.3f}")
 
         # Initialize agents
         self.initialize_agents()
@@ -526,9 +525,9 @@ class ReinforcementLearningDSA(DCOPBase):
             current_cost = self.calculate_global_cost()
             episode_costs.append(current_cost)
 
-            # Track probability evolution
+            # Track p evolution
             for agent in self.agents:
-                self.probability_evolution[agent.id_].append(agent.probability)
+                self.probability_evolution[agent.id_].append(agent.p)
 
         # DIAGNOSTIC: Check actions taken
         if episode_num < 3 or episode_num % 10 == 0:
@@ -605,7 +604,7 @@ class ReinforcementLearningDSA(DCOPBase):
         stats = {}
         
         for agent in self.agents:
-            agent_stats = {'probability': getattr(agent, 'probability', 0.5),
+            agent_stats = {'p': getattr(agent, 'p', 0.5),
                            'baseline': getattr(agent, 'baseline', 0.0), 'policy_weights': agent.policy_weights}
 
             if hasattr(agent, 'feature_running_stats') and agent.feature_running_stats is not None:
@@ -626,7 +625,7 @@ def create_dcop_problem(
     num_agents: Optional[int] = None,
     domain_size: Optional[int] = None,
     edge_probability: Optional[float] = None,
-    probability: Optional[float] = None,
+    p: Optional[float] = None,
     agent_priority_config: Optional[Dict[str, Any]] = None,
     shared_topology: Optional[SharedGraphTopology] = None,
     current_episode: int = 0,
@@ -640,8 +639,8 @@ def create_dcop_problem(
         problem_id: Unique identifier for this problem
         num_agents: Number of agents (uses global config if None)
         domain_size: Domain size (uses global config if None)
-        edge_probability: Edge probability for constraint graph
-        probability: Probability parameter for DSA
+        edge_probability: Edge p for constraint graph
+        p: Probability parameter for DSA
         agent_priority_config: Agent priority configuration
         shared_topology: Shared topology for synchronized experiments
         current_episode: Current episode number
@@ -664,7 +663,7 @@ def create_dcop_problem(
     if algorithm == Algorithm.DSA:
         return StandardDSA(
             problem_id, num_agents, domain_size, problem_name, algorithm,
-            edge_probability, probability, agent_priority_config, shared_topology, current_episode
+            edge_probability, p, agent_priority_config, shared_topology, current_episode
         )
     elif algorithm == Algorithm.MGM:
         return MaximumGainMessages(
@@ -762,7 +761,7 @@ def create_selected_dcop(i, algorithm, k, p=None, shared_topology=None, current_
             num_agents=A,
             domain_size=D,
             edge_probability=k,
-            probability=p,
+            p=p,
             agent_priority_config=agent_mu_config,
             shared_topology=shared_topology,
             current_episode=current_episode
@@ -820,7 +819,7 @@ def solve_synchronized_experiment(dcop_configs, k, shared_topology=None):
     
     Args:
         dcop_configs: List of algorithm configurations
-        k: Graph density (edge probability)
+        k: Graph density (edge p)
         shared_topology: Optional pre-created SharedGraphTopology instance
     
     Returns:
@@ -881,7 +880,7 @@ def solve_synchronized_experiment(dcop_configs, k, shared_topology=None):
                 
                 # Create DCOP instance with shared topology
                 if algorithm == Algorithm.DSA:
-                    dcop = create_selected_dcop(episode, algorithm, k, dcop_config.get('probability', dcop_config.get('p', 0.5)), shared_topology, current_episode=episode)
+                    dcop = create_selected_dcop(episode, algorithm, k, dcop_config.get('p', dcop_config.get('p', 0.5)), shared_topology, current_episode=episode)
                 else:  # MGM
                     dcop = create_selected_dcop(episode, algorithm, k, shared_topology=shared_topology, current_episode=episode)
                 

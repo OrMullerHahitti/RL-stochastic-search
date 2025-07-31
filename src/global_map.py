@@ -63,17 +63,17 @@ MASTER_CONFIG = {
         "stratified": STRATIFIED_PRIORITY_CONFIG,
     },  # Options: 'uniform', 'hierarchical', 'manual', 'stratified'
     # Graph topology parameters - used by ALL algorithms
-    # These k values determine edge probability in constraint graphs
+    # These k values determine edge p in constraint graphs
     "graph_densities": [0.2, 0.7],  # k values for sparse/dense graphs
-    "default_edge_probability": 0.3,  # Default edge probability when not specified
-    "agents": 60,  # Number of agents (countries) - large scale for meaningful probability learning
+    "default_edge_probability": 0.3,  # Default edge p when not specified
+    "agents": 60,  # Number of agents (countries) - large scale for meaningful p learning
     "domain_size": 4,  # Domain size - balanced for challenging but solvable large-scale problems
     "repetitions": 30,  # Number of repetitions per algorithm
     "iterations": 50,  # Iterations per experiment run or episode length
     
     # DSA-RL specific hyperparameters - centralized single source of truth
     "dsa_rl": {
-        "p0": 0.5,  # Initial probability for all agents
+        "p0": 0.5,  # Initial p for all agents
         "learning_rate": 0.005,  # Actor learning rate (reduced for large-scale stability)
         "baseline_decay": 0.99,  # Exponential moving average decay (bethe)
         "num_episodes": 50,  # Number of learning episodes (increased for large-scale learning)

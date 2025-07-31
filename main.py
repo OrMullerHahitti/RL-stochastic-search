@@ -4,7 +4,7 @@ DCOP Algorithm Comparison: Complete Learning and Evaluation Workflow
 
 This script demonstrates the complete process of Distributed Constraint Optimization:
 1. Problem Creation - Set up graph structure and constraints
-2. Learning Phase - DSA-RL learns optimal probability policies  
+2. Learning Phase - DSA-RL learns optimal p policies  
 3. Comparison Phase - Fair comparison of DSA, MGM, and learned DSA-RL
 4. Results Analysis - Performance analysis and learned policy insights
 
@@ -106,7 +106,7 @@ def run_learning_phase(shared_topology: SharedGraphTopology, config: Dict) -> Di
     """
     Phase 2: DSA-RL Learning Phase
     
-    Train DSA-RL agents to learn optimal probability policies for EACH graph density.
+    Train DSA-RL agents to learn optimal p policies for EACH graph density.
     Each density requires different strategies due to different conflict patterns.
     """
     print_subsection("DSA-RL Learning Phase")
@@ -159,7 +159,7 @@ def run_learning_phase(shared_topology: SharedGraphTopology, config: Dict) -> Di
         
         # Get learned policies for this density
         learned_stats = learning_dcop.get_final_agent_statistics()
-        density_probabilities = {agent_id: stats['probability'] 
+        density_probabilities = {agent_id: stats['p'] 
                                for agent_id, stats in learned_stats.items()}
         
         learned_probabilities_by_density[graph_density] = density_probabilities
@@ -237,7 +237,7 @@ def run_comparison_phase(shared_topology: SharedGraphTopology,
                     num_agents=config['agents'],
                     domain_size=config['domain_size'],
                     edge_probability=graph_density,
-                    probability=p,
+                    p=p,
                     agent_priority_config=config['priority_variant']['stratified'],
                     shared_topology=shared_topology,
                     current_episode=rep
@@ -385,8 +385,8 @@ def analyze_results(results: Dict[str, Dict[str, List[float]]],
         dense_avg = sum(dense_probs) / len(dense_probs)
         
         print(f"\n   Strategy Adaptation:")
-        print(f"      - Sparse graph strategy: {sparse_avg:.3f} avg probability")
-        print(f"      - Dense graph strategy: {dense_avg:.3f} avg probability")
+        print(f"      - Sparse graph strategy: {sparse_avg:.3f} avg p")
+        print(f"      - Dense graph strategy: {dense_avg:.3f} avg p")
         print(f"      - Adaptation magnitude: {abs(sparse_avg - dense_avg):.3f}")
         
         if sparse_avg > dense_avg:
@@ -499,7 +499,7 @@ def main():
         
         print("\nKey Findings:")
         print("   ✅ Graph structure maintained consistently across all phases")
-        print("   ✅ DSA-RL learned density-specific probability policies")
+        print("   ✅ DSA-RL learned density-specific p policies")
         print("   ✅ Fair comparison uses appropriate learned policies per density")
         print("   ✅ Learning-enhanced agents adapt to different graph structures")
         

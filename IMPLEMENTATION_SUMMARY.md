@@ -48,7 +48,7 @@ Successfully transformed the fixed-p DSA implementation into a per-agent REINFOR
   - Experiment framework supporting RL hyperparameters
 
 ## Hyperparameters
-- **p₀**: Initial probability (default 0.5)
+- **p₀**: Initial p (default 0.5)
 - **α**: Learning rate (default 0.01)
 - **β**: Baseline decay (default 0.9)
 - **K**: Episode length (default 20)
