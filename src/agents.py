@@ -368,10 +368,14 @@ class ReinforcementLearningAgent(Agent):
         self.policy_weights[-1] = max(-5.0, min(5.0, logit_p0))
 
         self.probability = initial_probability
+        self.episode_probability = initial_probability  # Fixed per episode
         self.learning_rate = learning_rate
         self.baseline_decay = baseline_decay
         self.baseline = 0.0
         self.episode_features = {}
+        
+        # Prevent probabilities from becoming too low (maintains exploration)
+        self.min_probability = 0.05  # Minimum exploration probability
 
         # Episode data collection for learning
         self.episode_data: List[Dict] = []
@@ -392,6 +396,25 @@ class ReinforcementLearningAgent(Agent):
             'gain': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1},
             'activity': {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1}
         }
+        
+        # Normalized advantage tracking for variance reduction
+        self.advantage_stats = {'sum': 0, 'sum_sq': 0, 'count': 0, 'mean': 0, 'std': 1}
+        
+        # Feature-scaled learning rate components
+        self.base_learning_rate = learning_rate
+        self.episode_feature_magnitude = 0.0
+        self.average_feature_norm = 1.0  # Will be updated by problem class if available
+        
+        # Convergence monitoring for fixed probabilities
+        self.probability_history = []
+        self.convergence_threshold = 0.01
+        self.convergence_window = 10
+        self.is_converged = False
+        self.episodes_since_convergence = 0
+        
+        # Learning rate scheduling
+        self.initial_learning_rate = learning_rate
+        self.lr_decay_factor = 1000.0  # τ parameter for decay schedule
 
         # Contextual learning parameters
         self.neighborhood_context = {
@@ -416,6 +439,27 @@ class ReinforcementLearningAgent(Agent):
         if stats['count'] > 1:
             variance = (stats['sum_sq'] / stats['count']) - (stats['mean'] * stats['mean'])
             stats['std'] = max(np.sqrt(max(variance, 0)), 0.01)  # Prevent zero std
+    
+    def update_advantage_stats(self, advantage: float) -> None:
+        """Update running statistics for advantage normalization."""
+        self.advantage_stats['sum'] += advantage
+        self.advantage_stats['sum_sq'] += advantage * advantage
+        self.advantage_stats['count'] += 1
+        
+        # Update mean and standard deviation
+        self.advantage_stats['mean'] = self.advantage_stats['sum'] / self.advantage_stats['count']
+        if self.advantage_stats['count'] > 1:
+            variance = (self.advantage_stats['sum_sq'] / self.advantage_stats['count']) - (self.advantage_stats['mean'] * self.advantage_stats['mean'])
+            self.advantage_stats['std'] = max(np.sqrt(max(variance, 0)), 0.01)  # Prevent zero std
+    
+    def normalize_advantage(self, advantage: float) -> float:
+        """Normalize advantage using running statistics."""
+        if self.advantage_stats['count'] < 5:  # Not enough data for reliable stats
+            return advantage  # Use raw advantage initially
+        
+        # Z-score normalization
+        normalized = (advantage - self.advantage_stats['mean']) / self.advantage_stats['std']
+        return normalized
 
     def normalize_with_running_stats(self, feature_name: str, value: float) -> float:
         """Normalize feature using running statistics."""
@@ -518,6 +562,108 @@ class ReinforcementLearningAgent(Agent):
             self.neighbor_changes.pop(0)
 
         return np.mean(self.neighbor_changes) if self.neighbor_changes else 0.0
+    
+    def compute_feature_scaled_learning_rate(self, episode_count: int) -> float:
+        """Compute feature-scaled and scheduled learning rate."""
+        # Learning rate scheduling: decay over episodes
+        scheduled_lr = self.initial_learning_rate * (1.0 / np.sqrt(1.0 + episode_count / self.lr_decay_factor))
+        
+        # Feature-based scaling
+        if self.episode_feature_magnitude > 0 and self.average_feature_norm > 0:
+            feature_scale = self.episode_feature_magnitude / self.average_feature_norm
+            feature_scaled_lr = scheduled_lr * feature_scale
+        else:
+            feature_scaled_lr = scheduled_lr
+        
+        # Reduce learning rate for converged agents
+        if self.is_converged:
+            convergence_penalty = 0.1  # 10% of original rate
+            feature_scaled_lr *= convergence_penalty
+        
+        return max(feature_scaled_lr, scheduled_lr * 0.01)  # Minimum 1% of scheduled rate
+    
+    def update_convergence_monitoring(self, current_probability: float) -> None:
+        """Update convergence monitoring for probability stability."""
+        self.probability_history.append(current_probability)
+        
+        # Keep only the last N probabilities
+        if len(self.probability_history) > self.convergence_window:
+            self.probability_history.pop(0)
+        
+        # Check for convergence
+        if len(self.probability_history) >= self.convergence_window:
+            # Calculate probability change magnitude over window
+            changes = [abs(self.probability_history[i] - self.probability_history[i-1]) 
+                      for i in range(1, len(self.probability_history))]
+            max_change = max(changes) if changes else float('inf')
+            
+            if max_change < self.convergence_threshold:
+                if not self.is_converged:
+                    self.is_converged = True
+                    self.episodes_since_convergence = 0
+                else:
+                    self.episodes_since_convergence += 1
+            else:
+                self.is_converged = False
+                self.episodes_since_convergence = 0
+
+    def compute_policy_probability(self, policy_weights: np.ndarray) -> float:
+        """
+        Compute probability from policy weights using episode-level features.
+        
+        Args:
+            policy_weights: Policy weights to compute probability from
+            
+        Returns:
+            Probability value between 0 and 1
+        """
+        # Use episode-level features (averaged from previous episode)
+        # If no previous episode, use neutral features (zeros)
+        if self.episode_features:
+            # Use most recent episode features (average across iterations)
+            recent_features = list(self.episode_features.values())
+            if recent_features:
+                features = np.mean(recent_features, axis=0)
+            else:
+                features = np.zeros(self.num_features)
+        else:
+            # First episode - use neutral features
+            features = np.zeros(self.num_features)
+        
+        features_with_bias = np.append(features, 1.0)
+        linear_output = np.dot(policy_weights, features_with_bias)
+        return sigmoid(linear_output)
+
+    def start_new_episode(self):
+        """
+        Prepare for a new episode: freeze policy, clear stored gradients.
+        """
+        # Compute episode feature magnitude from previous episode (if available)
+        if self.episode_features:
+            recent_features = list(self.episode_features.values())
+            if recent_features:
+                avg_features = np.mean(recent_features, axis=0)
+                self.episode_feature_magnitude = np.linalg.norm(avg_features)
+            else:
+                self.episode_feature_magnitude = 1.0  # Default value
+        else:
+            self.episode_feature_magnitude = 1.0  # First episode default
+        
+        # Freeze current policy for whole episode
+        self.episode_probability = self.compute_policy_probability(self.policy_weights)
+        
+        # Ensure minimum exploration probability
+        if self.episode_probability < self.min_probability:
+            self.episode_probability = self.min_probability
+            
+        self.probability = self.episode_probability
+        
+        # Update convergence monitoring
+        self.update_convergence_monitoring(self.episode_probability)
+        
+        # Reset episode-specific data
+        self.episode_data.clear()
+        self.episode_features.clear()
 
     def compute_linear_policy_probability(self, features: np.ndarray) -> float:
         """Compute probability using linear policy with contextual adjustments."""
@@ -557,7 +703,7 @@ class ReinforcementLearningAgent(Agent):
 
     def compute(self, messages: List[Msg]) -> None:
         """Compute decision with reinforcement learning."""
-        # Extract features and update probability
+        # Extract features (no probability update during episode)
         max_iterations = 100  # Default fallback
         features = self.extract_local_features(messages, self.global_clock, max_iterations)
         self.episode_features[self.local_clock] = features
@@ -565,20 +711,32 @@ class ReinforcementLearningAgent(Agent):
 
         self.current_features = features
 
-        # Make DSA decision
+        # Make DSA decision using frozen episode_probability
         current_cost = self.calculate_local_cost(messages)
         best_variable, min_cost = self.find_best_assignment(messages)
 
         did_flip = False
         if min_cost < current_cost:
-            if self.agent_random.random() < self.probability:
+            if self.agent_random.random() < self.episode_probability:
                 self.variable = best_variable
                 did_flip = True
+
+        # Calculate immediate reward from this action
+        cost_after_action = self.calculate_local_cost(messages) if not did_flip else min_cost
+        immediate_reward = self.previous_local_cost - cost_after_action if hasattr(self, 'previous_local_cost') else 0.0
+
+        # Compute gradient weights for this time step
+        # ∇θ log π = [features, 1] * (action - probability)
+        features_with_bias = np.append(features, 1.0)
+        action = 1.0 if did_flip else 0.0
+        gradient_weights = features_with_bias * (action - self.episode_probability)
 
         self.episode_data.append({
             'did_flip': did_flip,
             'beginning_iteration_local_cost': current_cost,
-            'features': features.copy()
+            'features': features.copy(),
+            'gradient_weights': gradient_weights.copy(),
+            'reward': immediate_reward
         })
 
     def send_messages(self) -> None:
@@ -587,45 +745,41 @@ class ReinforcementLearningAgent(Agent):
             message = Msg(self.id_, neighbor_id, self.variable)
             self.outbox.insert([message])
 
-    def finish_episode(self, episode_rewards: Optional[List[float]] = None) -> None:
-        """Update policy weights using episode-level REINFORCE."""
+    def finish_episode(self, episode_reward: float, episode_count: int = 0) -> None:
+        """Update policy weights using episode-level REINFORCE with enhanced variance reduction."""
 
-        # 1. Compute episode-level features (aggregate across episode)
-        if self.episode_data:
-            all_features = [data['features'] for data in self.episode_data]
-            episode_features = np.mean(all_features, axis=0)  # Average features
-        else:
+        if not self.episode_data:
             return
 
-        # 2. Compute episode-level "action"
-        total_flips = sum(data['did_flip'] for data in self.episode_data)
-        flip_rate = total_flips / len(self.episode_data)  # Episode action = flip rate
+        # Aggregate gradients from all time steps
+        total_gradient = sum(entry['gradient_weights'] for entry in self.episode_data)
 
-        # 3. Compute episode-level advantage
-        episode_return = sum(episode_rewards) if episode_rewards else 0.0
-        advantage = episode_return - self.baseline
+        # Compute raw advantage relative to baseline
+        raw_advantage = episode_reward - self.baseline
+        
+        # Update advantage statistics and normalize
+        self.update_advantage_stats(raw_advantage)
+        normalized_advantage = self.normalize_advantage(raw_advantage)
 
-        # 4. Compute episode-level gradient
-        # ∇θ log π = [features, 1] * (episode_action - episode_probability)
-        features_with_bias = np.append(episode_features, 1.0)
-        episode_gradient = features_with_bias * (flip_rate - self.episode_probability)
+        # Compute feature-scaled and scheduled learning rate
+        adaptive_learning_rate = self.compute_feature_scaled_learning_rate(episode_count)
 
-        # 5. Single weight update for entire episode
-        gradient_norm = np.linalg.norm(episode_gradient)
-        if gradient_norm > 2.0:
-            episode_gradient = episode_gradient * (2.0 / gradient_norm)
+        # Probability-dependent step sizing (prevents drastic changes near extremes)
+        step_scale = self.episode_probability * (1.0 - self.episode_probability)
+        
+        # Enhanced policy update with all scaling factors
+        scaled_update = adaptive_learning_rate * step_scale * total_gradient * normalized_advantage
+        self.policy_weights += scaled_update
 
-        self.policy_weights += self.learning_rate * episode_gradient * advantage
-        self.policy_weights = np.clip(self.policy_weights, -20.0, 20.0)
+        # Enhanced policy weight clamping with adaptive boundaries
+        # Stricter bounds for more stable learning
+        weight_bound = 10.0 if self.is_converged else 20.0
+        np.clip(self.policy_weights, -weight_bound, weight_bound, out=self.policy_weights)
 
-        # 6. Update baseline
-        self.baseline = (self.baseline_decay * self.baseline +
-                         (1 - self.baseline_decay) * episode_return)
+        # Update moving-average baseline
+        self.baseline = self.baseline_decay * self.baseline + (1 - self.baseline_decay) * episode_reward
 
-        # 7. Compute probability for NEXT episode
-        self.episode_probability = self.compute_linear_policy_probability(episode_features)
-
-        # 8. Clear episode data
+        # Clear episode data (do NOT update probability here - let start_new_episode handle it)
         self.episode_data = []
 
     def get_local_gain(self) -> float:

@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from .utils import distribute_rewards_proportionally
 from .validation import validate_agent_mu_config, ensure_dictionary_keys
 from .topology import SharedGraphTopology
-from .global_map import Algorithm, get_testing_parameters, get_master_config
+from .global_map import Algorithm, get_testing_parameters, get_master_config, get_dsa_rl_hyperparameters
 import random
 import numpy as np
 from typing import List, Dict, Optional, Any, Tuple
@@ -498,63 +498,80 @@ class ReinforcementLearningDSA(DCOPBase):
         """Execute a single learning episode."""
         episode_costs = []
         
-        # Reset episode data for all agents
+        # Reset episode data and start new episode for all agents
         for agent in self.agents:
             agent.episode_data = []
+            if hasattr(agent, 'start_new_episode'):
+                agent.start_new_episode()
         
         # Record initial cost
         initial_cost = self.calculate_global_cost()
         episode_costs.append(initial_cost)
         
+        # DIAGNOSTIC: Check episode setup
+        if episode_num < 3 or episode_num % 10 == 0:  # Log first few episodes and every 10th
+            agent_probs = [getattr(agent, 'episode_probability', getattr(agent, 'probability', 'N/A'))
+                          for agent in self.agents if hasattr(agent, 'probability')]
+            avg_prob = sum(p for p in agent_probs if isinstance(p, (int, float))) / len(agent_probs) if agent_probs else 0
+            print(f"Episode {episode_num}: Initial cost={initial_cost:.1f}, Avg probability={avg_prob:.3f}")
+
         # Initialize agents
         self.initialize_agents()
-        
+
         # Run episode iterations
         for iteration in range(self.iterations_per_episode):
             self.execute_iteration(iteration + 1)
-            
+
             # Record cost
             current_cost = self.calculate_global_cost()
             episode_costs.append(current_cost)
-            
+
             # Track probability evolution
             for agent in self.agents:
                 self.probability_evolution[agent.id_].append(agent.probability)
+
+        # DIAGNOSTIC: Check actions taken
+        if episode_num < 3 or episode_num % 10 == 0:
+            total_flips = sum(sum(1 for entry in getattr(agent, 'episode_data', [])
+                                 if entry.get('did_flip', False)) for agent in self.agents)
+            final_cost = episode_costs[-1]
+            improvement = initial_cost - final_cost
+            print(f"Episode {episode_num}: {total_flips} flips, Final cost={final_cost:.1f}, Improvement={improvement:.1f}")
         
         return episode_costs
 
-    def finish_episode_learning(self, episode_costs: List[float]) -> None:
+    def finish_episode_learning(self, episode_costs: List[float], episode_count: int = 0) -> None:
         """Apply learning updates after episode completion."""
 
-        # Calculate episode-level improvement
+        # Calculate episode-level improvement (single reward signal)
         initial_cost = episode_costs[0]
         final_cost = episode_costs[-1]
-        episode_improvement = initial_cost - final_cost
+        episode_reward = initial_cost - final_cost
 
-        # Episode-level reward distribution
+        # Compute cross-agent feature statistics for normalization
+        total_feature_magnitude = 0.0
+        agent_count = 0
         for agent in self.agents:
-            if agent.episode_data:
-                # Option 1: Equal distribution
-                episode_reward = episode_improvement / len(self.agents)
+            if hasattr(agent, 'episode_feature_magnitude') and agent.episode_feature_magnitude > 0:
+                total_feature_magnitude += agent.episode_feature_magnitude
+                agent_count += 1
+        
+        # Update average feature norm for all agents
+        if agent_count > 0:
+            average_feature_norm = total_feature_magnitude / agent_count
+            for agent in self.agents:
+                if hasattr(agent, 'average_feature_norm'):
+                    agent.average_feature_norm = average_feature_norm
 
-                # Option 2: Contribution-based distribution (uncomment to use)
-                # total_agent_contribution = 0
-                # for data in agent.episode_data:
-                #     if data['did_flip']:
-                #         total_agent_contribution += max(0, data.get('local_gain', 0))
-                #
-                # # Calculate all agents' contributions for proportional distribution
-                # total_all_contributions = sum(
-                #     sum(max(0, d.get('local_gain', 0)) for d in a.episode_data if d['did_flip'])
-                #     for a in self.agents if a.episode_data
-                # )
-                #
-                # if total_all_contributions > 0:
-                #     episode_reward = episode_improvement * (total_agent_contribution / total_all_contributions)
-                # else:
-                #     episode_reward = episode_improvement / len(self.agents)
-
-                # Apply episode-level learning update (single reward, not list)
+        # Apply learning update to each agent with the same episode reward
+        for agent in self.agents:
+            if hasattr(agent, 'finish_episode'):
+                # Pass episode count if agent supports it
+                try:
+                    agent.finish_episode(episode_reward, episode_count)
+                except TypeError:
+                    # Fallback for agents that don't support episode_count parameter
+                    agent.finish_episode(episode_reward)
     def execute(self) -> List[float]:
         """Execute multiple episodes of reinforcement learning."""
         print(f"Starting DSA-RL training: {self.num_episodes} episodes, {self.iterations_per_episode} iterations each")
@@ -572,7 +589,7 @@ class ReinforcementLearningDSA(DCOPBase):
             episode_costs = self.execute_single_episode(episode)
             
             # Apply learning
-            self.finish_episode_learning(episode_costs)
+            self.finish_episode_learning(episode_costs, episode)
             
             # Track episode results
             self.all_episode_costs.append(episode_costs)
@@ -594,14 +611,9 @@ class ReinforcementLearningDSA(DCOPBase):
         stats = {}
         
         for agent in self.agents:
-            agent_stats = {
-                'probability': getattr(agent, 'probability', 0.5),
-                'baseline': getattr(agent, 'baseline', 0.0)
-            }
-            
-            if hasattr(agent, 'policy_weights') and agent.policy_weights is not None:
-                agent_stats['policy_weights'] = agent.policy_weights
-            
+            agent_stats = {'probability': getattr(agent, 'probability', 0.5),
+                           'baseline': getattr(agent, 'baseline', 0.0), 'policy_weights': agent.policy_weights}
+
             if hasattr(agent, 'feature_running_stats') and agent.feature_running_stats is not None:
                 agent_stats['feature_stats'] = agent.feature_running_stats
             

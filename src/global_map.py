@@ -67,9 +67,9 @@ MASTER_CONFIG = {
     "graph_densities": [0.2, 0.7],  # k values for sparse/dense graphs
     "default_edge_probability": 0.3,  # Default edge probability when not specified
     "agents": 60,  # Number of agents (countries) - large scale for meaningful probability learning
-    "domain_size": 12,  # Domain size - balanced for challenging but solvable large-scale problems
+    "domain_size": 4,  # Domain size - balanced for challenging but solvable large-scale problems
     "repetitions": 30,  # Number of repetitions per algorithm
-    "iterations": 100,  # Iterations per experiment run or episode length
+    "iterations": 50,  # Iterations per experiment run or episode length
     
     # DSA-RL specific hyperparameters - centralized single source of truth
     "dsa_rl": {
