@@ -75,7 +75,7 @@ MASTER_CONFIG = {
     "dsa_rl": {
         "p0": 0.5,  # Initial p for all agents
         "learning_rate": 0.005,  # Actor learning rate (reduced for large-scale stability)
-        "baseline_decay": 0.99,  # Exponential moving average decay (bethe)
+        "baseline_decay": 0.9,  # Exponential moving average decay (bethe)
         "num_episodes": 50,  # Number of learning episodes (increased for large-scale learning)
         "gamma": 0.9,  # Discount factor for future rewards
         "num_global_features": 6,  # Number of global features for critic

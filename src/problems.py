@@ -573,10 +573,10 @@ class ReinforcementLearningDSA(DCOPBase):
         
         for episode in range(self.num_episodes):
             # Prepare episode if using shared topology
-            if self.shared_topology:
-                self.shared_topology.prepare_episode(episode)
-                # Update for new episode
-                self._setup_from_shared_topology()
+
+            self.shared_topology.prepare_episode(episode)
+            # Update for new episode
+            self._setup_from_shared_topology()
             
             # Execute episode
             episode_costs = self.execute_single_episode(episode)
