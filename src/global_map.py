@@ -73,7 +73,7 @@ MASTER_CONFIG = {
     
     # DSA-RL specific hyperparameters - centralized single source of truth
     "dsa_rl": {
-        "p0": 0.75,  # Initial probability for all agents
+        "p0": 0.5,  # Initial probability for all agents
         "learning_rate": 0.005,  # Actor learning rate (reduced for large-scale stability)
         "baseline_decay": 0.99,  # Exponential moving average decay (bethe)
         "num_episodes": 50,  # Number of learning episodes (increased for large-scale learning)

@@ -544,9 +544,7 @@ class ReinforcementLearningDSA(DCOPBase):
         """Apply learning updates after episode completion."""
 
         # Calculate episode-level improvement (single reward signal)
-        initial_cost = episode_costs[0]
-        final_cost = episode_costs[-1]
-        episode_reward = initial_cost - final_cost
+
 
         # Compute cross-agent feature statistics for normalization
         total_feature_magnitude = 0.0
@@ -560,18 +558,14 @@ class ReinforcementLearningDSA(DCOPBase):
         if agent_count > 0:
             average_feature_norm = total_feature_magnitude / agent_count
             for agent in self.agents:
-                if hasattr(agent, 'average_feature_norm'):
-                    agent.average_feature_norm = average_feature_norm
+                agent.average_feature_norm = average_feature_norm
 
         # Apply learning update to each agent with the same episode reward
         for agent in self.agents:
-            if hasattr(agent, 'finish_episode'):
                 # Pass episode count if agent supports it
-                try:
-                    agent.finish_episode(episode_reward, episode_count)
-                except TypeError:
-                    # Fallback for agents that don't support episode_count parameter
-                    agent.finish_episode(episode_reward)
+
+            agent.finish_episode()
+
     def execute(self) -> List[float]:
         """Execute multiple episodes of reinforcement learning."""
         print(f"Starting DSA-RL training: {self.num_episodes} episodes, {self.iterations_per_episode} iterations each")

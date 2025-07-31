@@ -214,7 +214,7 @@ class Agent(ABC):
         """Default implementation - override in specific agents."""
         return 0
     
-    def finish_episode(self, episode_rewards=None):
+    def finish_episode(self):
         """Default implementation - override in learning agents."""
         pass
     
@@ -664,6 +664,7 @@ class ReinforcementLearningAgent(Agent):
         # Reset episode-specific data
         self.episode_data.clear()
         self.episode_features.clear()
+        self.local_clock =0
 
     def compute_linear_policy_probability(self, features: np.ndarray) -> float:
         """Compute probability using linear policy with contextual adjustments."""
@@ -730,13 +731,14 @@ class ReinforcementLearningAgent(Agent):
         features_with_bias = np.append(features, 1.0)
         action = 1.0 if did_flip else 0.0
         gradient_weights = features_with_bias * (action - self.episode_probability)
+        #
 
         self.episode_data.append({
-            'did_flip': did_flip,
-            'beginning_iteration_local_cost': current_cost,
-            'features': features.copy(),
+            'did_flip': did_flip,#TODO: check in necessarily
+            'beginning_iteration_local_cost': current_cost, #TODO: check in necessarily
+            'features': features.copy(),#TODO: check in necessarily
             'gradient_weights': gradient_weights.copy(),
-            'reward': immediate_reward
+            'reward': self.calculate_recent_improvement()
         })
 
     def send_messages(self) -> None:
@@ -744,31 +746,27 @@ class ReinforcementLearningAgent(Agent):
         for neighbor_id in self.neighbor_agent_ids:
             message = Msg(self.id_, neighbor_id, self.variable)
             self.outbox.insert([message])
-
-    def finish_episode(self, episode_reward: float, episode_count: int = 0) -> None:
+    def compute_gt(self):
+        g_t:List[float] = []
+        for i,entry in enumerate(self.episode_data):
+            g_t.append(entry['reward']*self.baseline_decay**i)
+    def finish_episode(self) -> None:
         """Update policy weights using episode-level REINFORCE with enhanced variance reduction."""
-
-        if not self.episode_data:
-            return
 
         # Aggregate gradients from all time steps
         total_gradient = sum(entry['gradient_weights'] for entry in self.episode_data)
+
+        total_gradient =0
+        for i,entry in enumerate(self.episode_data):
+            total_gradient += entry['gradient_weights']
 
         # Compute raw advantage relative to baseline
         raw_advantage = episode_reward - self.baseline
         
         # Update advantage statistics and normalize
         self.update_advantage_stats(raw_advantage)
-        normalized_advantage = self.normalize_advantage(raw_advantage)
 
-        # Compute feature-scaled and scheduled learning rate
-        adaptive_learning_rate = self.compute_feature_scaled_learning_rate(episode_count)
-
-        # Probability-dependent step sizing (prevents drastic changes near extremes)
-        step_scale = self.episode_probability * (1.0 - self.episode_probability)
-        
-        # Enhanced policy update with all scaling factors
-        scaled_update = adaptive_learning_rate * step_scale * total_gradient * normalized_advantage
+        scaled_update =   total_gradient * raw_advantage
         self.policy_weights += scaled_update
 
         # Enhanced policy weight clamping with adaptive boundaries
