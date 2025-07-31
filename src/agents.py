@@ -575,15 +575,7 @@ class ReinforcementLearningAgent(Agent):
                 self.variable = best_variable
                 did_flip = True
 
-        # Store data for learning
-        features_with_bias = np.append(features, 1.0)
-        if did_flip:
-            gradient_weights = features_with_bias * (1 - self.probability)
-        else:
-            gradient_weights = features_with_bias * (-self.probability)
-
         self.episode_data.append({
-            'gradient_weights': gradient_weights,
             'did_flip': did_flip,
             'beginning_iteration_local_cost': current_cost,
             'features': features.copy()
@@ -596,34 +588,45 @@ class ReinforcementLearningAgent(Agent):
             self.outbox.insert([message])
 
     def finish_episode(self, episode_rewards: Optional[List[float]] = None) -> None:
-        """Update policy weights using actor-critic advantages."""
-        if not self.episode_data or not episode_rewards:
+        """Update policy weights using episode-level REINFORCE."""
+
+        # 1. Compute episode-level features (aggregate across episode)
+        if self.episode_data:
+            all_features = [data['features'] for data in self.episode_data]
+            episode_features = np.mean(all_features, axis=0)  # Average features
+        else:
             return
 
-        min_length = min(len(self.episode_data), len(episode_rewards))
+        # 2. Compute episode-level "action"
+        total_flips = sum(data['did_flip'] for data in self.episode_data)
+        flip_rate = total_flips / len(self.episode_data)  # Episode action = flip rate
 
+        # 3. Compute episode-level advantage
+        episode_return = sum(episode_rewards) if episode_rewards else 0.0
+        advantage = episode_return - self.baseline
 
-        # Apply policy gradient updates
-        for i in range(min_length):
-            data = self.episode_data[i]
-            advantage = episode_rewards[i]
-            gradient_weights = data['gradient_weights']
+        # 4. Compute episode-level gradient
+        # ∇θ log π = [features, 1] * (episode_action - episode_probability)
+        features_with_bias = np.append(episode_features, 1.0)
+        episode_gradient = features_with_bias * (flip_rate - self.episode_probability)
 
-            self.policy_weights += self.learning_rate * gradient_weights * advantage
-            self.policy_weights = np.clip(self.policy_weights, -20.0, 20.0)
-            base_probability = self.compute_linear_policy_probability(self.episode_features[i])
-            self.p = sigmoid(base_probability)
+        # 5. Single weight update for entire episode
+        gradient_norm = np.linalg.norm(episode_gradient)
+        if gradient_norm > 2.0:
+            episode_gradient = episode_gradient * (2.0 / gradient_norm)
 
-        # Update baseline for monitoring
-        total_advantage = sum(episode_rewards) if episode_rewards else 0
-        self.baseline = update_exponential_moving_average(
-            self.baseline, total_advantage, self.baseline_decay
-        )
+        self.policy_weights += self.learning_rate * episode_gradient * advantage
+        self.policy_weights = np.clip(self.policy_weights, -20.0, 20.0)
 
-        # Clear episode data
+        # 6. Update baseline
+        self.baseline = (self.baseline_decay * self.baseline +
+                         (1 - self.baseline_decay) * episode_return)
+
+        # 7. Compute probability for NEXT episode
+        self.episode_probability = self.compute_linear_policy_probability(episode_features)
+
+        # 8. Clear episode data
         self.episode_data = []
-        self.episode_features = {}
-        self.local_clock = 0
 
     def get_local_gain(self) -> float:
         """Calculate local gain from the last decision."""
