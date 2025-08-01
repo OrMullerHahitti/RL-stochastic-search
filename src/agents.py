@@ -227,7 +227,7 @@ class ReinforcementLearningAgent(Agent):
         domain_size: int,
         initial_probability: float = 0.5,
         learning_rate: float = 0.01,
-        baseline_decay_factor: float = 0.9,
+        baseline_decay: float = 0.9,
         gamma: float = 0.9
     ):
         """
@@ -238,19 +238,21 @@ class ReinforcementLearningAgent(Agent):
             domain_size: Size of the agent's variable domain
             initial_probability: Initial p value
             learning_rate: Learning rate for policy updates
-            baseline_decay_factor: Decay factor for baseline updates
+            baseline_decay: Decay factor for baseline updates
             gamma: Discount for future reward
         """
         super().__init__(agent_id, domain_size)
 
+        self.did_flip_last_iteration :bool = False
         self.p = initial_probability
         self.learning_rate = learning_rate
-        self.baseline_decay_factor = baseline_decay_factor
+        self.baseline_decay = baseline_decay
         self.gamma = gamma
         self.baseline = 0.0
 
         # Prevent probabilities from becoming too low (maintains exploration)
-        self.min_probability = 0.05  # Minimum exploration p
+        self.min_probability = 0.1  # Minimum exploration p
+        self.max_probability = 0.9
 
         self.episode_data: List[Dict] = []
         self.recent_local_costs: List[float] = []
@@ -259,10 +261,20 @@ class ReinforcementLearningAgent(Agent):
 
     def compute(self, messages: List[Msg]) -> None:
         """Compute decision with reinforcement learning."""
-
-        # Make DSA decision using frozen p
+        # Calculate local cost and store it
         current_cost = self.calculate_local_cost(messages)
         self.recent_local_costs.append(current_cost)
+
+        # store reward for the last iteration
+        reward = self.calculate_recent_improvement()
+
+
+        self.episode_data.append({
+            'did_flip': self.did_flip_last_iteration,
+            'reward': reward
+        })
+
+        # Make DSA decision using frozen p
         best_variable, min_cost = self.find_best_assignment(messages)
 
         did_flip = False
@@ -271,12 +283,10 @@ class ReinforcementLearningAgent(Agent):
                 self.variable = best_variable
                 did_flip = True
 
-        reward = self.calculate_recent_improvement()
+        self.did_flip_last_iteration = did_flip
+        
 
-        self.episode_data[-1]['reward'] = reward
-        self.episode_data.append({
-            'did_flip': did_flip,
-        })
+        
 
     def calculate_recent_improvement(self):
         """Calculate recent local cost change """
@@ -297,11 +307,13 @@ class ReinforcementLearningAgent(Agent):
             gradient = self.episode_data[i]['did_flip']-sigmoid(self.theta)
             self.theta += self.learning_rate * advantage *gradient
 
-        self.baseline = self.baseline_decay_factor * self.baseline + (1 - self.baseline_decay_factor) * episode_reward.mean()
+        self.baseline = self.baseline_decay * self.baseline + (1 - self.baseline_decay) * episode_reward.mean()
 
         self.p = sigmoid(self.theta)
         if self.p < self.min_probability:
             self.p = self.min_probability
+        elif self.p > self.max_probability:
+            self.p = self.max_probability
 
         self.episode_data.clear()
 

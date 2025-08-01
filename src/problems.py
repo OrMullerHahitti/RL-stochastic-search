@@ -399,7 +399,7 @@ class ReinforcementLearningDSA(DCOPBase):
         edge_probability: float,
         initial_probability: float = 0.5,
         learning_rate: float = 0.01,
-        baseline_decay_factor: float = 0.9,
+        baseline_decay: float = 0.9,
         gamma: float = 0.9,
         iterations_per_episode: int = 100,
         num_episodes: int = 50,
@@ -409,7 +409,7 @@ class ReinforcementLearningDSA(DCOPBase):
     ):
         self.initial_probability = initial_probability
         self.learning_rate = learning_rate
-        self.baseline_decay_factor = baseline_decay_factor
+        self.baseline_decay = baseline_decay
         self.gamma= gamma
         self.iterations_per_episode = iterations_per_episode
         self.num_episodes = num_episodes
@@ -429,7 +429,7 @@ class ReinforcementLearningDSA(DCOPBase):
             agent_id = i + 1
             agent = ReinforcementLearningAgent(
                 agent_id, self.domain_size, self.initial_probability,
-                self.learning_rate, self.baseline_decay_factor, self.gamma
+                self.learning_rate, self.baseline_decay, self.gamma
             )
             self.agents.append(agent)
             
@@ -467,9 +467,6 @@ class ReinforcementLearningDSA(DCOPBase):
             current_cost = self.calculate_global_cost()
             episode_costs.append(current_cost)
 
-            # Track p evolution
-            for agent in self.agents:
-                self.probability_evolution[agent.id_].append(agent.p)
 
         # DIAGNOSTIC: Check actions taken
         if episode_num < 3 or episode_num % 10 == 0:
@@ -483,6 +480,12 @@ class ReinforcementLearningDSA(DCOPBase):
 
     def finish_episode_learning(self, episode_costs: List[float], episode_count: int = 0) -> None:
         """Apply learning updates after episode completion."""
+
+
+
+        # Track p evolution
+        for agent in self.agents:
+            self.probability_evolution[agent.id_].append(agent.p)
 
         # Calculate episode-level improvement (single reward signal)
 
@@ -514,7 +517,7 @@ class ReinforcementLearningDSA(DCOPBase):
         final_costs = []
         
         for episode in range(self.num_episodes):
-            # Prepare episode if using shared topology
+            # Prepare episode
 
             self.shared_topology.prepare_episode(episode)
             # Update for new episode
@@ -547,13 +550,9 @@ class ReinforcementLearningDSA(DCOPBase):
         
         for agent in self.agents:
             agent_stats = {'p': getattr(agent, 'p', 0.5),
-                           'baseline': getattr(agent, 'baseline', 0.0), 'policy_weights': agent.policy_weights}
-
-            if hasattr(agent, 'feature_running_stats') and agent.feature_running_stats is not None:
-                agent_stats['feature_stats'] = agent.feature_running_stats
-            
+                           'baseline': getattr(agent, 'baseline', 0.0)}
             stats[agent.id_] = agent_stats
-        
+
         return stats
 
 
