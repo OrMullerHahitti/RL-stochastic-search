@@ -57,6 +57,8 @@ class Agent(ABC):
         self.inbox = None
         self.outbox = None
 
+        self.p = None
+
     def set_neighbors(self, constraint_relations: List) -> None:
         """
         Set up neighbor relationships and constraint tables.

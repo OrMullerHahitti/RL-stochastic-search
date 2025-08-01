@@ -1,11 +1,9 @@
 from .agents import *
 from abc import ABC, abstractmethod
-from .utils import distribute_rewards_proportionally
-from .validation import validate_agent_mu_config, ensure_dictionary_keys
+from .validation import validate_agent_mu_config
 from .topology import SharedGraphTopology
 from .global_map import Algorithm, get_testing_parameters, get_master_config, get_dsa_rl_hyperparameters
 import random
-import numpy as np
 from typing import List, Dict, Optional, Any, Tuple
 
 # Note: SharedGraphTopology is now imported from topology.py
@@ -57,7 +55,7 @@ class Neighbors():
 
     # Check if a given agent is part of this neighbor relationship
     def is_agent_in_obj(self,agent_id_input):
-        if agent_id_input == self.a1.id_  or agent_id_input == self.a2.id_ :
+        if agent_id_input == self.a1.id_ or agent_id_input == self.a2.id_:
             return True
         return False
 
@@ -91,16 +89,13 @@ class UnboundedBuffer():
         self.buffer = []
         return ans
 
+
 # Class to manage message passing between agents in a DCOP
 class Mailer():
     def __init__(self,agents):
         self.inbox = UnboundedBuffer()
         self.agents_outbox = {}
-        for i, agent in enumerate(agents):
-            # Defensive check to catch the error early
-            if not hasattr(agent, 'id_'):
-                raise TypeError(f"Agent at index {i} is not an agent object (type: {type(agent)}, value: {agent}). Expected agent object with 'id_' attribute.")
-            
+        for  agent in agents:
             outbox = UnboundedBuffer()
             self.agents_outbox[agent.id_] = outbox
             agent.inbox = outbox
@@ -125,12 +120,9 @@ class Mailer():
         return msgs_by_receiver_dict
 
 
-
 class DCOPBase(ABC):
     """
-    Abstract base class for modern DCOP implementations.
-    
-    Provides cleaner architecture with proper typing and better separation of concerns.
+    Abstract base class for DCOP implementations.
     """
     
     def __init__(
@@ -144,7 +136,7 @@ class DCOPBase(ABC):
         p: Optional[float] = None,
         agent_priority_config: Optional[Dict[str, Any]] = None,
         shared_topology: Optional[SharedGraphTopology] = None,
-        current_episode: int = 0
+        current_episode: int = 0,
     ):
         # Problem configuration
         self.problem_id = problem_id
@@ -190,8 +182,6 @@ class DCOPBase(ABC):
     
     def _setup_from_shared_topology(self) -> None:
         """Setup problem using shared topology."""
-        if not self.shared_topology:
-            return
             
         # Get episode data from shared topology
         episode_penalties, episode_assignments = self.shared_topology.get_episode_data(self.current_episode)
@@ -289,16 +279,34 @@ class DCOPBase(ABC):
         
         # Execute agent iterations
         for agent in self.agents:
-            agent.execute_iteration(iteration)
-    
+            agent.execute_iteration(self.global_clock)
+
+    def execute(self) -> List[float]:
+        """Execute the DCOP algorithm."""
+        # Record initial cost
+        initial_cost = self.calculate_global_cost()
+        self.cost_history.append(initial_cost)
+
+        # Initialize agents
+        self.initialize_agents()
+
+        # Get iteration count from global config
+        config = get_master_config()
+        max_iterations = config.get('iterations', 100)
+
+        # Run algorithm iterations
+        for iteration in range(max_iterations):
+            self.execute_iteration(iteration + 1)
+
+            # Record cost after each iteration
+            current_cost = self.calculate_global_cost()
+            self.cost_history.append(current_cost)
+
+        return self.cost_history
+
     @abstractmethod
     def create_agents(self) -> None:
         """Create agents for this problem. Must be implemented by subclasses."""
-        pass
-    
-    @abstractmethod
-    def execute(self) -> List[float]:
-        """Execute the DCOP algorithm. Must be implemented by subclasses."""
         pass
 
 
@@ -316,28 +324,7 @@ class StandardDSA(DCOPBase):
             agent = DSAAgent(agent_id, self.domain_size, self.p)
             self.agents.append(agent)
     
-    def execute(self) -> List[float]:
-        """Execute standard DSA algorithm."""
-        # Record initial cost
-        initial_cost = self.calculate_global_cost()
-        self.cost_history.append(initial_cost)
-        
-        # Initialize agents
-        self.initialize_agents()
-        
-        # Get iteration count from global config
-        config = get_master_config()
-        max_iterations = config.get('iterations', 100)
-        
-        # Run algorithm iterations
-        for iteration in range(max_iterations):
-            self.execute_iteration(iteration + 1)
-            
-            # Record cost after each iteration
-            current_cost = self.calculate_global_cost()
-            self.cost_history.append(current_cost)
-        
-        return self.cost_history
+
 
 
 class LearnedPolicyDSA(DCOPBase):
@@ -373,30 +360,7 @@ class LearnedPolicyDSA(DCOPBase):
             learned_prob = self.learned_probabilities.get(agent_id, 0.5)
             agent = DSAAgent(agent_id, self.domain_size, learned_prob)
             self.agents.append(agent)
-    
-    def execute(self) -> List[float]:
-        """Execute DSA with learned probabilities."""
-        # Record initial cost
-        initial_cost = self.calculate_global_cost()
-        self.cost_history.append(initial_cost)
-        
-        # Initialize agents
-        self.initialize_agents()
-        
-        # Get iteration count from global config
-        config = get_master_config()
-        max_iterations = config.get('iterations', 100)
-        
-        # Run algorithm iterations
-        for iteration in range(max_iterations):
-            self.execute_iteration(iteration + 1)
-            
-            # Record cost after each iteration
-            current_cost = self.calculate_global_cost()
-            self.cost_history.append(current_cost)
-        
-        return self.cost_history
-    
+
     def get_agent_probabilities(self) -> Dict[int, float]:
         """Get the probabilities being used by all agents."""
         return {agent.id_: agent.p for agent in self.agents}
@@ -416,37 +380,13 @@ class MaximumGainMessages(DCOPBase):
             agent_id = i + 1
             agent = MGMAgent(agent_id, self.domain_size)
             self.agents.append(agent)
-    
-    def execute(self) -> List[float]:
-        """Execute MGM algorithm."""
-        # Record initial cost
-        initial_cost = self.calculate_global_cost()
-        self.cost_history.append(initial_cost)
-        
-        # Initialize agents
-        self.initialize_agents()
-        
-        # Get iteration count from global config
-        config = get_master_config()
-        max_iterations = config.get('iterations', 100)
-        
-        # Run algorithm iterations
-        for iteration in range(max_iterations):
-            self.execute_iteration(iteration + 1)
-            
-            # Record cost after each iteration
-            current_cost = self.calculate_global_cost()
-            self.cost_history.append(current_cost)
-        
-        return self.cost_history
 
 
 class ReinforcementLearningDSA(DCOPBase):
     """
     DSA with REINFORCE learning implementation.
     
-    Agents learn optimal p policies through reinforcement learning
-    using actor-critic methods with local and global features.
+    Agents learn individual probability (p) through reinforcement learning
     """
     
     def __init__(
@@ -459,7 +399,8 @@ class ReinforcementLearningDSA(DCOPBase):
         edge_probability: float,
         initial_probability: float = 0.5,
         learning_rate: float = 0.01,
-        baseline_decay: float = 0.9,
+        baseline_decay_factor: float = 0.9,
+        gamma: float = 0.9,
         iterations_per_episode: int = 100,
         num_episodes: int = 50,
         agent_priority_config: Optional[Dict[str, Any]] = None,
@@ -468,7 +409,8 @@ class ReinforcementLearningDSA(DCOPBase):
     ):
         self.initial_probability = initial_probability
         self.learning_rate = learning_rate
-        self.decay_factor = baseline_decay
+        self.baseline_decay_factor = baseline_decay_factor
+        self.gamma= gamma
         self.iterations_per_episode = iterations_per_episode
         self.num_episodes = num_episodes
         
@@ -487,7 +429,7 @@ class ReinforcementLearningDSA(DCOPBase):
             agent_id = i + 1
             agent = ReinforcementLearningAgent(
                 agent_id, self.domain_size, self.initial_probability,
-                self.learning_rate, self.decay_factor
+                self.learning_rate, self.baseline_decay_factor, self.gamma
             )
             self.agents.append(agent)
             
@@ -679,6 +621,7 @@ def create_dcop_problem(
             initial_probability=kwargs.get('p0', dsa_rl_config['p0']),
             learning_rate=kwargs.get('learning_rate', dsa_rl_config['learning_rate']),
             baseline_decay=kwargs.get('baseline_decay', dsa_rl_config['baseline_decay']),
+            gamma=kwargs.get('gamma', dsa_rl_config['gamma']),
             iterations_per_episode=kwargs.get('iteration_per_episode', config['iterations']),
             num_episodes=kwargs.get('num_episodes', dsa_rl_config['num_episodes']),
             agent_priority_config=agent_priority_config,
