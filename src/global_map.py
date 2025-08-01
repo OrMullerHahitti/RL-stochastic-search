@@ -32,23 +32,16 @@ HIERARCHICAL_PRIORITY_CONFIG = {
 MANUAL_PRIORITY_CONFIG = {
     "default_mu": 50,
     "default_sigma": 10,
-    "manual": {
-        1: 90,
-        2: 85,
-        3: 80,  # VIP agents
-        28: 30,
-        29: 25,
-        30: 20,  # Low priority agents
-    },
+    "manual": { i: (1, 50 + i * 50, 20) for i in range(1, 31) },
 }
 
 STRATIFIED_PRIORITY_CONFIG = {
     "default_mu": 50,
     "default_sigma": 10,
     "random_stratified": {
-        "high": (20, 80, 20),  # 20 agents, μ=80, σ=20
-        "medium": (20, 50, 20),  # 20 agents, μ=50, σ=20
-        "low": (20, 20, 5),  # 20 agents, μ=20, σ=5
+        "high": (10, 150, 20),  # 20 agents, μ=80, σ=20
+        "medium": (10, 70, 20),  # 20 agents, μ=50, σ=20
+        "low": (10, 20, 5),  # 20 agents, μ=20, σ=5
     },
 }
 
@@ -61,15 +54,13 @@ MASTER_CONFIG = {
         "hierarchical": HIERARCHICAL_PRIORITY_CONFIG,
         "manual": MANUAL_PRIORITY_CONFIG,
         "stratified": STRATIFIED_PRIORITY_CONFIG,
-    },  # Options: 'uniform', 'hierarchical', 'manual', 'stratified'
-    # Graph topology parameters - used by ALL algorithms
-    # These k values determine edge p in constraint graphs
+    },
     "graph_densities": [0.2, 0.7],  # k values for sparse/dense graphs
     "default_edge_probability": 0.3,  # Default edge p when not specified
-    "agents": 60,  # Number of agents (countries) - large scale for meaningful p learning
-    "domain_size": 4,  # Domain size - balanced for challenging but solvable large-scale problems
+    "agents": 30,  # Number of agents (countries) - large scale for meaningful p learning
+    "domain_size": 3,  # Domain size - balanced for challenging but solvable large-scale problems
     "repetitions": 30,  # Number of repetitions per algorithm
-    "iterations": 50,  # Iterations per experiment run or episode length
+    "iterations": 100,  # Iterations per experiment run or episode length
     
     # DSA-RL specific hyperparameters - centralized single source of truth
     "dsa_rl": {
@@ -78,18 +69,8 @@ MASTER_CONFIG = {
         "baseline_decay": 0.9,  # Exponential moving average decay (bethe)
         "num_episodes": 50,  # Number of learning episodes (increased for large-scale learning)
         "gamma": 0.9,  # Discount factor for future rewards
-        "num_global_features": 6,  # Number of global features for critic
         "critic_init_std": 0.2,  # Standard deviation for critic weight initialization
-        "baseline_agents": 60,  # Baseline number of agents for scaling
-        "curriculum_easy_threshold": 3,  # Agent-to-color ratio threshold for easy problems
-        "curriculum_medium_threshold": 6,  # Agent-to-color ratio threshold for medium problems
-        "curriculum_progress_ratio": 0.3,  # Fraction of episodes for curriculum ramp-up
-        "curriculum_rate_multipliers": {  # Learning rate multipliers by curriculum stage
-            "easy": 1.2,
-            "medium": 1.0,
-            "hard": 0.8
-        },
-        "critic_weight_clip_bounds": 100.0,  # Bounds for clipping critic weights
+        "baseline_agents": 30,  # Baseline number of agents for scaling
     },
     
     # Testing and debugging parameters

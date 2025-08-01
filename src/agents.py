@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Tuple
 
 import numpy as np
+from numpy import signedinteger
+from numpy._typing import _32Bit, _64Bit
 
 from .global_map import Msg
 from .utils import sigmoid
@@ -228,7 +230,7 @@ class ReinforcementLearningAgent(Agent):
         initial_probability: float = 0.5,
         learning_rate: float = 0.01,
         baseline_decay: float = 0.9,
-        gamma: float = 0.9
+        gamma: float = 0.99
     ):
         """
         Initialize reinforcement learning agent.
@@ -243,6 +245,8 @@ class ReinforcementLearningAgent(Agent):
         """
         super().__init__(agent_id, domain_size)
 
+
+        self.assignments_last_iteration  = None
         self.did_flip_last_iteration :bool = False
         self.p = initial_probability
         self.learning_rate = learning_rate
@@ -264,19 +268,17 @@ class ReinforcementLearningAgent(Agent):
         # Calculate local cost and store it
         current_cost = self.calculate_local_cost(messages)
         self.recent_local_costs.append(current_cost)
-
+        changers = self.get_local_changers(messages)
         # store reward for the last iteration
-        reward = self.calculate_recent_improvement()
-
-
+        reward = self.calculate_reward(changers)
+        self.assignments_last_iteration = np.array([msg.information for msg in messages])
         self.episode_data.append({
             'did_flip': self.did_flip_last_iteration,
             'reward': reward
+            
         })
-
         # Make DSA decision using frozen p
         best_variable, min_cost = self.find_best_assignment(messages)
-
         did_flip = False
         if min_cost < current_cost:
             if self.agent_random.random() < self.p:
@@ -286,28 +288,40 @@ class ReinforcementLearningAgent(Agent):
         self.did_flip_last_iteration = did_flip
         
 
-        
+    def get_local_changers(self,messages: List[Msg]):
+        if self.assignments_last_iteration is None:
+            return 0
+        current_assignments = np.array([msg.information for msg in messages])
+        if len(current_assignments) != len(self.assignments_last_iteration):
+            return 0  # Can't compare different sized arrays
+        return np.count_nonzero(current_assignments - self.assignments_last_iteration)
 
-    def calculate_recent_improvement(self):
-        """Calculate recent local cost change """
+    def calculate_reward(self,num_changers: int) -> float:
         if len(self.recent_local_costs) < 2:
             return 0.0
-
         iteration_beginning_local_cost = self.recent_local_costs[-1]
         previous_iteration_beginning_local_cost = self.recent_local_costs[-2]
+        delta = previous_iteration_beginning_local_cost - iteration_beginning_local_cost
 
-        return previous_iteration_beginning_local_cost - iteration_beginning_local_cost
+
+
+        return delta / (num_changers+1)
+
+
 
     def finish_episode(self) -> None:
         """Update policy weights using episode-level REINFORCE with enhanced variance reduction."""
         # Compute raw advantage relative to baseline
         episode_reward = self.compute_gt()
+        if len(episode_reward) == 0:
+            return  # No episode data to process
+        self.baseline = self.baseline_decay * self.baseline + (1 - self.baseline_decay) * episode_reward.mean()
+
         advantages= episode_reward - self.baseline
         for i,advantage in enumerate(advantages):
             gradient = self.episode_data[i]['did_flip']-sigmoid(self.theta)
             self.theta += self.learning_rate * advantage *gradient
 
-        self.baseline = self.baseline_decay * self.baseline + (1 - self.baseline_decay) * episode_reward.mean()
 
         self.p = sigmoid(self.theta)
         if self.p < self.min_probability:
@@ -331,6 +345,7 @@ class ReinforcementLearningAgent(Agent):
 
     def send_messages(self) -> None:
         """Send current variable value to all neighbors."""
+
         for neighbor_id in self.neighbor_agent_ids:
             message = Msg(self.id_, neighbor_id, self.variable)
             self.outbox.insert([message])
