@@ -481,33 +481,12 @@ class ReinforcementLearningDSA(DCOPBase):
     def finish_episode_learning(self, episode_costs: List[float], episode_count: int = 0) -> None:
         """Apply learning updates after episode completion."""
 
-
-
         # Track p evolution
         for agent in self.agents:
             self.probability_evolution[agent.id_].append(agent.p)
 
-        # Calculate episode-level improvement (single reward signal)
-
-
-        # Compute cross-agent feature statistics for normalization
-        total_feature_magnitude = 0.0
-        agent_count = 0
+        # Apply learning update to each agent
         for agent in self.agents:
-            if hasattr(agent, 'episode_feature_magnitude') and agent.episode_feature_magnitude > 0:
-                total_feature_magnitude += agent.episode_feature_magnitude
-                agent_count += 1
-        
-        # Update average feature norm for all agents
-        if agent_count > 0:
-            average_feature_norm = total_feature_magnitude / agent_count
-            for agent in self.agents:
-                agent.average_feature_norm = average_feature_norm
-
-        # Apply learning update to each agent with the same episode reward
-        for agent in self.agents:
-                # Pass episode count if agent supports it
-
             agent.finish_episode()
 
     def execute(self) -> List[float]:
