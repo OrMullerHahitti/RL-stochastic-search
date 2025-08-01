@@ -21,32 +21,8 @@ def sigmoid(x):
     else:
         exp_x = math.exp(x)
         return exp_x / (1 + exp_x)
-def compute_advantage(reward, baseline):
-    """
-    Compute advantage for REINFORCE with baseline.
-    
-    Args:
-        reward (float): Reward received
-        baseline (float): Current baseline value
-        
-    Returns:
-        float: Advantage (reward - baseline)
-    """
-    return reward - baseline
 
-def update_exponential_moving_average(current_value, new_value, beta):
-    """
-    Update exponential moving average baseline.
-    
-    Args:
-        current_value (float): Current EMA value
-        new_value (float): New observation
-        beta (float): Decay factor (typically 0.9)
-        
-    Returns:
-        float: Updated EMA value
-    """
-    return beta * current_value + (1 - beta) * new_value
+
 
 def distribute_rewards_proportionally(changers, local_gains, global_improvement):
     """

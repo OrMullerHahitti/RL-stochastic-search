@@ -371,7 +371,7 @@ class LearnedPolicyDSA(DCOPBase):
         for i in range(self.num_agents):
             agent_id = i + 1
             learned_prob = self.learned_probabilities.get(agent_id, 0.5)
-            agent = LearnedPolicyAgent(agent_id, self.domain_size, learned_prob)
+            agent = DSAAgent(agent_id, self.domain_size, learned_prob)
             self.agents.append(agent)
     
     def execute(self) -> List[float]:
