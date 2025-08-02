@@ -11,7 +11,7 @@ def sigmoid(x):
     Returns:
         float: Sigmoid of x
     """
-    # Clamp x to prevent overflow - sigmoid approaches 0 or 1 beyond these bounds
+    # Clamp x to prevent overflow
     x = max(-500, min(500, x))
     
     # Use numerically stable computation

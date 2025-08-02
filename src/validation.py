@@ -1,7 +1,4 @@
-"""
-Validation utilities for ensuring config dictionaries and object states are correct.
-This module helps replace hasattr() and .get() patterns with explicit validation.
-"""
+"""Validation utilities for ensuring config dictionaries and object states are correct."""
 
 from typing import Dict, Any, List, Optional, Union
 
