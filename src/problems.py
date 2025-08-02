@@ -468,6 +468,9 @@ class ReinforcementLearningDSA(DCOPBase):
             current_cost = self.calculate_global_cost()
             episode_costs.append(current_cost)
 
+            for agent in self.agents:
+                agent.avg_cost_per_agent = current_cost / len(self.agents)
+
 
         # DIAGNOSTIC: Check actions taken
         if episode_num < 3 or episode_num % 10 == 0:

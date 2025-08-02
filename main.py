@@ -70,7 +70,7 @@ def create_problem_structure(config: Dict) -> SharedGraphTopology:
         num_agents=config['agents'],
         domain_size=config['domain_size'],
         edge_probability=config['graph_densities'][0],  # Use first density for learning
-        agent_priority_config=config['priority_variant']['stratified'],
+        agent_priority_config=config['priority_variant']['manual'],
         base_seed=42,  # Fixed seed for reproducibility
         mode="learning"  # Start in learning mode
     )
@@ -115,7 +115,7 @@ def run_learning_phase(shared_topology: SharedGraphTopology, config: Dict) -> Di
             num_agents=config['agents'],
             domain_size=config['domain_size'],
             edge_probability=graph_density,
-            agent_priority_config=config['priority_variant']['stratified'],
+            agent_priority_config=config['priority_variant']['manual'],
             base_seed=42 + density_idx,  # Different seed per density for variation
             mode="learning"
         )
@@ -127,7 +127,7 @@ def run_learning_phase(shared_topology: SharedGraphTopology, config: Dict) -> Di
             num_agents=config['agents'],
             domain_size=config['domain_size'],
             edge_probability=graph_density,
-            agent_priority_config=config['priority_variant']['stratified'],
+            agent_priority_config=config['priority_variant']['manual'],
             shared_topology=learning_topology,
             current_episode=0,
             num_episodes=config['dsa_rl']['num_episodes'],
@@ -203,7 +203,7 @@ def run_comparison_phase(shared_topology: SharedGraphTopology,
             num_agents=config['agents'],
             domain_size=config['domain_size'],
             edge_probability=graph_density,
-            agent_priority_config=config['priority_variant']['stratified'],
+            agent_priority_config=config['priority_variant']['manual'],
             base_seed=42,
             mode="comparison"
         )
@@ -225,7 +225,7 @@ def run_comparison_phase(shared_topology: SharedGraphTopology,
                     domain_size=config['domain_size'],
                     edge_probability=graph_density,
                     p=p,
-                    agent_priority_config=config['priority_variant']['stratified'],
+                    agent_priority_config=config['priority_variant']['manual'],
                     shared_topology=shared_topology,
                     current_episode=rep
                 )
@@ -254,7 +254,7 @@ def run_comparison_phase(shared_topology: SharedGraphTopology,
                 num_agents=config['agents'],
                 domain_size=config['domain_size'],
                 edge_probability=graph_density,
-                agent_priority_config=config['priority_variant']['stratified'],
+                agent_priority_config=config['priority_variant']['manual'],
                 shared_topology=shared_topology,
                 current_episode=rep
             )
@@ -293,7 +293,7 @@ def run_comparison_phase(shared_topology: SharedGraphTopology,
                     num_agents=config['agents'],
                     domain_size=config['domain_size'],
                     edge_probability=graph_density,
-                    agent_priority_config=config['priority_variant']['stratified'],
+                    agent_priority_config=config['priority_variant']['manual'],
                     shared_topology=shared_topology,
                     current_episode=rep
                 )
@@ -445,7 +445,7 @@ def main():
     print_section_header("DCOP Algorithm Learning and Comparison", "=")
     
     print("🎯 Objective: Compare DSA, MGM, and learning-enhanced DSA-RL")
-    print("Method: Learn optimal policies, then fair comparison on identical problems")
+    print("Method: optimize policies, then fair comparison on identical problems")
     print("Focus: Graph coloring with distributed constraint optimization")
     
     # Load configuration

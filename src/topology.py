@@ -201,7 +201,7 @@ class SharedGraphTopology:
             penalty_rng = random.Random((self.base_seed + episode_num) * 23)
             episode_penalties = {}
             for agent_id in range(1, self.num_agents + 1):
-                penalty_mean = self.agent_penalty_means[agent_id]
+                penalty_mean = self.agent_penalty_means[agent_id][1]
                 episode_penalties[agent_id] = penalty_rng.normalvariate(penalty_mean, penalty_std)
         else:
             # Comparison mode: Fixed penalties for fair comparison
@@ -209,7 +209,7 @@ class SharedGraphTopology:
             penalty_rng = random.Random((self.base_seed + 0) * 23)
             episode_penalties = {}
             for agent_id in range(1, self.num_agents + 1):
-                penalty_mean = self.agent_penalty_means[agent_id]
+                penalty_mean = self.agent_penalty_means[agent_id][1]
                 episode_penalties[agent_id] = penalty_rng.normalvariate(penalty_mean, penalty_std)
         
         return episode_penalties

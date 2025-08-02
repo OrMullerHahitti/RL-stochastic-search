@@ -21,29 +21,19 @@ class Algorithm(Enum):
 # =============================================================================
 DEFAULT_PRIORITY_CONFIG = {"default_mu": 50, "default_sigma": 10}
 
-HIERARCHICAL_PRIORITY_CONFIG = {
-    "default_mu": 50,
-    "default_sigma": 10,
-    "hierarchical": {
-        "high": (1, 10, 80),  # agents 1-10: high priority
-        "medium": (11, 20, 50),  # agents 11-20: medium priority
-        "low": (21, 30, 20),  # agents 21-30: low priority
-    },
-}
-
 MANUAL_PRIORITY_CONFIG = {
     "default_mu": 50,
     "default_sigma": 10,
-    "manual": { i: (1, 50 + i * 50, 20) for i in range(1, 31) },
+    "manual": {i: (1, 50 + i * 50, 10) for i in range(1, 31)},
 }
 
 STRATIFIED_PRIORITY_CONFIG = {
     "default_mu": 50,
     "default_sigma": 10,
     "random_stratified": {
-        "high": (10, 150, 20),  # 20 agents, μ=80, σ=20
-        "medium": (10, 70, 20),  # 20 agents, μ=50, σ=20
-        "low": (10, 20, 5),  # 20 agents, μ=20, σ=5
+        "high": (10, 150, 10),
+        "medium": (10, 100, 10),
+        "low": (10, 50, 10),
     },
 }
 
@@ -53,21 +43,20 @@ MASTER_CONFIG = {
     # This determines the penalty distribution (μ values) for constraint costs
     "priority_variant": {
         "uniform": DEFAULT_PRIORITY_CONFIG,
-        "hierarchical": HIERARCHICAL_PRIORITY_CONFIG,
         "manual": MANUAL_PRIORITY_CONFIG,
         "stratified": STRATIFIED_PRIORITY_CONFIG,
     },
     "graph_densities": [0.2, 0.7],  # k values for sparse/dense graphs
     "default_edge_probability": 0.3,  # Default edge p when not specified
     "agents": 30,  # Number of agents (countries) - large scale for meaningful p learning
-    "domain_size": 3,  # Domain size - balanced for challenging but solvable large-scale problems
+    "domain_size": 4,  # Domain size - balanced for challenging but solvable large-scale problems
     "repetitions": 30,  # Number of repetitions per algorithm
     "iterations": 100,  # Iterations per experiment run or episode length
     
     # DSA-RL specific hyperparameters - centralized single source of truth
     "dsa_rl": {
         "p0": 0.5,  # Initial p for all agents
-        "learning_rate": 0.005,  # Actor learning rate (reduced for large-scale stability)
+        "learning_rate": 0.05,  # Actor learning rate (reduced for large-scale stability)
         "baseline_decay": 0.9,  # Exponential moving average decay (bethe)
         "num_episodes": 50,  # Number of learning episodes (increased for large-scale learning)
         "gamma": 0.9,  # Discount factor for future rewards

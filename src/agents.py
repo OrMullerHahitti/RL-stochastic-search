@@ -245,7 +245,7 @@ class ReinforcementLearningAgent(Agent):
         """
         super().__init__(agent_id, domain_size)
 
-
+        self.avg_cost_per_agent = None
         self.assignments_last_iteration  = None
         self.did_flip_last_iteration :bool = False
         self.p = initial_probability
@@ -302,10 +302,11 @@ class ReinforcementLearningAgent(Agent):
         iteration_beginning_local_cost = self.recent_local_costs[-1]
         previous_iteration_beginning_local_cost = self.recent_local_costs[-2]
         delta = previous_iteration_beginning_local_cost - iteration_beginning_local_cost
+        proportional_delta = delta
+        if self.avg_cost_per_agent != 0:
+            proportional_delta = delta / self.avg_cost_per_agent
 
-
-
-        return delta / (num_changers+1)
+        return proportional_delta / (num_changers+1)
 
 
 
