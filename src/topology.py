@@ -103,11 +103,7 @@ class SharedGraphTopology:
             if should_log_phase_transitions():
                 print(f"  New config - Vary penalties: {self.current_phase_config['vary_penalties']}")
                 print(f"  New config - Vary initial assignments: {self.current_phase_config['vary_initial_assignments']}")
-    
-    def get_current_mode(self) -> str:
-        """Get the current operation mode."""
-        return self.mode
-    
+
     def _generate_fixed_topology(self) -> None:
         """Generate fixed graph topology shared across all algorithms."""
         topology_rng = random.Random(self.base_seed * 17)

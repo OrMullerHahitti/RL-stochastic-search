@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-"""
-DCOP Algorithm Comparison: Complete Learning and Evaluation Workflow
-
-This script demonstrates the complete process of Distributed Constraint Optimization:
-1. Problem Creation - Set up graph structure and constraints
-2. Learning Phase - DSA-RL learns optimal p policies  
-3. Comparison Phase - Fair comparison of DSA, MGM, and learned DSA-RL
-4. Results Analysis - Performance analysis and learned policy insights
-
-Author: Claude Code
-"""
-
 import time
 from typing import Dict, List, Any
 
