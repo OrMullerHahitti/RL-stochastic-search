@@ -1,9 +1,4 @@
-"""
-Graph Topology Management for DCOP Problems
-
-This module manages shared graph topology and synchronized cost updates
-to ensure fair comparisons between different algorithms (DSA, MGM, DSA-RL).
-"""
+"""Graph Topology Management for DCOP Problems"""
 
 import random
 from typing import Dict, List, Tuple, Optional, Any
@@ -16,18 +11,7 @@ from .global_map import (
 
 
 class SharedGraphTopology:
-    """
-    Manages shared graph topology and synchronized cost updates for fair algorithm comparison.
-    
-    Supports two distinct modes:
-    1. Learning Phase: Varied penalties/assignments for robust RL training
-    2. Comparison Phase: Fixed penalties/assignments for fair algorithm comparison
-    
-    Ensures:
-    1. Identical graph connections (edges) across all algorithms and episodes  
-    2. Mode-appropriate penalty/assignment variation
-    3. Proper phase transition logging and validation
-    """
+    """Manages shared graph topology and synchronized cost updates for fair algorithm comparison."""
     
     def __init__(
         self, 
@@ -38,17 +22,6 @@ class SharedGraphTopology:
         base_seed: int = 42,
         mode: str = "comparison"
     ):
-        """
-        Initialize shared topology.
-        
-        Args:
-            num_agents: Number of agents in the problem
-            domain_size: Size of each agent's domain
-            edge_probability: Probability of edge creation between agents (k parameter)
-            agent_priority_config: Configuration for agent priority/penalty values
-            base_seed: Base seed for deterministic topology generation
-            mode: Operation mode - "learning" or "comparison" (default: "comparison")
-        """
         self.num_agents = num_agents
         self.domain_size = domain_size
         self.edge_probability = edge_probability
@@ -78,7 +51,6 @@ class SharedGraphTopology:
         self._generate_penalty_means()
     
     def _load_phase_config(self, mode: str) -> Dict[str, Any]:
-        """Load phase configuration based on the current mode."""
         if mode == "learning":
             return get_learning_phase_config()
         elif mode == "comparison":
@@ -87,12 +59,6 @@ class SharedGraphTopology:
             raise ValueError(f"Invalid mode '{mode}'. Must be 'learning' or 'comparison'")
     
     def set_mode(self, new_mode: str) -> None:
-        """
-        Change the operation mode and update phase configuration.
-        
-        Args:
-            new_mode: New mode - "learning" or "comparison"
-        """
         if new_mode != self.mode:
             if should_log_phase_transitions():
                 print(f"SharedGraphTopology: Switching from '{self.mode}' to '{new_mode}' mode")
@@ -105,7 +71,6 @@ class SharedGraphTopology:
                 print(f"  New config - Vary initial assignments: {self.current_phase_config['vary_initial_assignments']}")
 
     def _generate_fixed_topology(self) -> None:
-        """Generate fixed graph topology shared across all algorithms."""
         topology_rng = random.Random(self.base_seed * 17)
         
         self.graph_edges = []
@@ -117,7 +82,6 @@ class SharedGraphTopology:
         print(f"Generated shared topology: {len(self.graph_edges)} edges for {self.num_agents} agents")
     
     def _generate_penalty_means(self) -> None:
-        """Generate fixed penalty means (μ values) for agents based on priority configuration."""
         config = self.agent_priority_config
         validate_agent_mu_config(config)
         default_penalty_mean = config['default_mu']
@@ -151,26 +115,6 @@ class SharedGraphTopology:
                         idx += 1
     
     def prepare_episode(self, episode_num: int, override_mode: Optional[str] = None) -> Tuple[Dict[int, float], Dict[int, int]]:
-        """
-        Prepare synchronized episode data according to current mode.
-        
-        Learning Mode:
-        - Allows penalty variation for robust RL training
-        - Allows initial assignment variation
-        - Maintains constant graph structure and density functions
-        
-        Comparison Mode:
-        - Fixed penalties across algorithms for fair comparison
-        - Fixed initial assignments across algorithms  
-        - Maintains constant graph structure and density functions
-        
-        Args:
-            episode_num: Episode number for deterministic generation
-            override_mode: Temporary mode override (optional)
-            
-        Returns:
-            Tuple of (agent_penalties, initial_assignments)
-        """
         self.current_episode = episode_num
         
         # Use override mode if provided, otherwise use current mode
@@ -192,20 +136,16 @@ class SharedGraphTopology:
         return episode_penalties, episode_assignments
     
     def _generate_episode_penalties(self, episode_num: int, phase_config: Dict[str, Any]) -> Dict[int, float]:
-        """Generate episode penalties based on phase configuration."""
         validate_agent_mu_config(self.agent_priority_config)
         penalty_std = self.agent_priority_config['default_sigma']
         
         if phase_config['vary_penalties']:
-            # Learning mode: Allow penalty variation for robust training
             penalty_rng = random.Random((self.base_seed + episode_num) * 23)
             episode_penalties = {}
             for agent_id in range(1, self.num_agents + 1):
                 penalty_mean = self.agent_penalty_means[agent_id][1]
                 episode_penalties[agent_id] = penalty_rng.normalvariate(penalty_mean, penalty_std)
         else:
-            # Comparison mode: Fixed penalties for fair comparison
-            # Use episode 0 as the fixed baseline for all comparisons
             penalty_rng = random.Random((self.base_seed + 0) * 23)
             episode_penalties = {}
             for agent_id in range(1, self.num_agents + 1):
@@ -215,16 +155,12 @@ class SharedGraphTopology:
         return episode_penalties
     
     def _generate_episode_assignments(self, episode_num: int, phase_config: Dict[str, Any]) -> Dict[int, int]:
-        """Generate episode initial assignments based on phase configuration."""
         if phase_config['vary_initial_assignments']:
-            # Learning mode: Allow assignment variation for robust training
             assignment_rng = random.Random((self.base_seed + episode_num) * 31)
             episode_assignments = {}
             for agent_id in range(1, self.num_agents + 1):
                 episode_assignments[agent_id] = assignment_rng.randint(1, self.domain_size)
         else:
-            # Comparison mode: Fixed assignments for fair comparison
-            # Use episode 0 as the fixed baseline for all comparisons
             assignment_rng = random.Random((self.base_seed + 0) * 31)
             episode_assignments = {}
             for agent_id in range(1, self.num_agents + 1):
@@ -233,19 +169,9 @@ class SharedGraphTopology:
         return episode_assignments
     
     def get_topology(self) -> List[Tuple[int, int]]:
-        """Get a copy of the shared graph topology."""
         return self.graph_edges.copy()
     
     def get_episode_data(self, episode_num: int) -> Tuple[Dict[int, float], Dict[int, int]]:
-        """
-        Get penalty and assignment data for a specific episode.
-        
-        Args:
-            episode_num: Episode number to retrieve data for
-            
-        Returns:
-            Tuple of (agent_penalties, initial_assignments)
-        """
         if episode_num not in self.episode_penalties:
             return self.prepare_episode(episode_num)
         
@@ -255,7 +181,6 @@ class SharedGraphTopology:
         )
     
     def get_topology_stats(self) -> Dict[str, Any]:
-        """Get statistics about the topology."""
         return {
             'num_agents': self.num_agents,
             'domain_size': self.domain_size,

@@ -7,7 +7,7 @@ try:
     PLOTTING_ENABLED = True
 except ImportError:
     PLOTTING_ENABLED = False
-    print("📊 Note: matplotlib not available. Plots will be disabled.")
+    print("Note: matplotlib not available. Plots will be disabled.")
 
 from src.problems import create_dcop_problem
 from src.topology import SharedGraphTopology
@@ -27,7 +27,7 @@ def print_subsection(title: str) -> None:
 
 def display_config(config: Dict) -> None:
     """Display the experiment configuration."""
-    print("🛠️ Experiment Configuration:")
+    print("Experiment Configuration:")
     print(f"   - Agents: {config['agents']}")
     print(f"   - Domain Size: {config['domain_size']} colors")
     print(f"   - Graph Densities: {config['graph_densities']}")
@@ -50,67 +50,47 @@ def display_config(config: Dict) -> None:
     # Verify the math adds up
     total_priority_agents = high_count + medium_count + low_count
     if total_priority_agents == config['agents']:
-        print(f"   ✅ Priority groups total: {total_priority_agents} agents")
+        print(f"   Priority groups total: {total_priority_agents} agents")
     else:
-        print(f"   ❌ Priority mismatch: {total_priority_agents} priority agents ≠ {config['agents']} total agents")
+        print(f"   Priority mismatch: {total_priority_agents} priority agents != {config['agents']} total agents")
 
 def create_problem_structure(config: Dict) -> SharedGraphTopology:
-    """
-    Phase 1: Create the shared problem structure.
-    
-    This creates a fixed graph topology that will be used consistently
-    across all algorithms and phases to ensure fair comparison.
-    """
+    """Create the shared problem structure."""
     print_subsection("Creating Shared Problem Structure")
     
     print("Generating constraint graph topology...")
     
-    # Create shared topology for fair comparison
     shared_topology = SharedGraphTopology(
         num_agents=config['agents'],
         domain_size=config['domain_size'],
-        edge_probability=config['graph_densities'][0],  # Use first density for learning
+        edge_probability=config['graph_densities'][0],
         agent_priority_config=config['priority_variant']['manual'],
-        base_seed=42,  # Fixed seed for reproducibility
-        mode="learning"  # Start in learning mode
+        base_seed=42,
+        mode="learning"
     )
     
     stats = shared_topology.get_topology_stats()
-    print(f"✅ Created constraint graph:")
-    print(f"   - {stats['num_agents']} agents (countries)")
-    print(f"   - {stats['num_edges']} constraints (borders)")
+    print(f"Created constraint graph:")
+    print(f"   - {stats['num_agents']} agents")
+    print(f"   - {stats['num_edges']} constraints")
     print(f"   - {stats['density']:.1%} density")
     print(f"   - {stats['avg_degree']:.1f} average neighbors per agent")
     
-    print("\n🎯 Problem Type: Graph Coloring")
-    print("   - Each agent is a country choosing a color")
-    print("   - Neighboring countries with same color incur penalty costs")
-    print("   - Goal: Minimize total conflict penalties")
-    
     return shared_topology
 
-def run_learning_phase(shared_topology: SharedGraphTopology, config: Dict) -> Dict[float, Dict[int, float]]:
-    """
-    Phase 2: DSA-RL Learning Phase
-    
-    Train DSA-RL agents to learn optimal p policies for EACH graph density.
-    Each density requires different strategies due to different conflict patterns.
-    """
+def run_learning_phase(shared_topology: SharedGraphTopology, config: Dict) -> tuple[Dict[float, Dict[int, float]], Dict[float, Dict[int, List[float]]]]:
+    """DSA-RL Learning Phase"""
     print_subsection("DSA-RL Learning Phase")
     
     print("Training DSA-RL agents with density-specific reinforcement learning...")
-    print("   - Separate learning for each graph density")
-    print("   - Each density has different optimal strategies")
-    print("   - Varied penalties and initial assignments within each density")
     
     learned_probabilities_by_density = {}
+    probability_evolution_by_density = {}
     
     for density_idx, graph_density in enumerate(config['graph_densities']):
         density_type = "sparse" if graph_density < 0.5 else "dense"
         print(f"\nLearning on {density_type} graph (k={graph_density})...")
-        print(f"   - Expected strategy: {'More aggressive (fewer conflicts)' if graph_density < 0.5 else 'More coordinated (many conflicts)'}")
         
-        # Create new shared topology for this density
         learning_topology = SharedGraphTopology(
             num_agents=config['agents'],
             domain_size=config['domain_size'],
@@ -142,18 +122,22 @@ def run_learning_phase(shared_topology: SharedGraphTopology, config: Dict) -> Di
         learning_costs = learning_dcop.execute()
         
         learning_time = time.time() - start_time
-        print(f"   ✅ Density {graph_density} learning completed in {learning_time:.1f} seconds")
+        print(f"   Density {graph_density} learning completed in {learning_time:.1f} seconds")
         
         # Get learned policies for this density
         learned_stats = learning_dcop.get_final_agent_statistics()
         density_probabilities = {agent_id: stats['p'] 
                                for agent_id, stats in learned_stats.items()}
         
+        # Get probability evolution data
+        probability_evolution = learning_dcop.get_probability_evolution()
+        
         learned_probabilities_by_density[graph_density] = density_probabilities
+        probability_evolution_by_density[graph_density] = probability_evolution
         
         # Display learning results for this density
         prob_values = list(density_probabilities.values())
-        print(f"   📈 Results for k={graph_density}:")
+        print(f"   Results for k={graph_density}:")
         print(f"      - Initial cost: {learning_costs[0]:.1f}")
         print(f"      - Final cost: {learning_costs[-1]:.1f}")
         print(f"      - Improvement: {learning_costs[0] - learning_costs[-1]:.1f}")
@@ -171,25 +155,15 @@ def run_learning_phase(shared_topology: SharedGraphTopology, config: Dict) -> Di
         print(f"   - Dense graph (k={densities[1]}) avg: {sum(dense_probs)/len(dense_probs):.3f}")
         print(f"   - Strategy difference: {abs(sum(sparse_probs)/len(sparse_probs) - sum(dense_probs)/len(dense_probs)):.3f}")
     
-    return learned_probabilities_by_density
+    return learned_probabilities_by_density, probability_evolution_by_density
 
 def run_comparison_phase(shared_topology: SharedGraphTopology, 
                         learned_probabilities_by_density: Dict[float, Dict[int, float]], 
                         config: Dict) -> Dict[str, List[float]]:
-    """
-    Phase 3: Algorithm Comparison Phase
-    
-    Run fair comparison between DSA (multiple probabilities), MGM, and DSA-RL.
-    All algorithms use the same graph structure and identical problem instances.
-    """
+    """Algorithm Comparison Phase"""
     print_subsection("Algorithm Comparison Phase")
     
     print("Running fair comparison with identical problem instances...")
-    print("   - Same graph structure for all algorithms")
-    print("   - Same penalties and initial assignments per repetition")
-    print("   - DSA-RL uses learned probabilities (no further learning)")
-    
-    # Switch to comparison mode for fair evaluation
     shared_topology.set_mode("comparison")
     
     results = {}
@@ -276,7 +250,7 @@ def run_comparison_phase(shared_topology: SharedGraphTopology,
         # Get the learned probabilities for this specific graph density
         density_learned_probabilities = learned_probabilities_by_density.get(graph_density, {})
         if not density_learned_probabilities:
-            print(f"   ❌ Warning: No learned probabilities for density {graph_density}, skipping DSA-RL")
+            print(f"   Warning: No learned probabilities for density {graph_density}, skipping DSA-RL")
             density_results["DSA_RL_Learned"] = []
         else:
             print(f"   Using policies learned specifically for k={graph_density}")
@@ -315,11 +289,7 @@ def run_comparison_phase(shared_topology: SharedGraphTopology,
 
 def analyze_results(results: Dict[str, Dict[str, List[float]]], 
                    learned_probabilities_by_density: Dict[float, Dict[int, float]]) -> None:
-    """
-    Phase 4: Results Analysis
-    
-    Analyze and display the performance comparison and learning insights.
-    """
+    """Results Analysis"""
     print_subsection("Results Analysis")
     
     print("Algorithm Performance Comparison:")
@@ -339,7 +309,7 @@ def analyze_results(results: Dict[str, Dict[str, List[float]]],
                 improvement = initial - final
                 print(f"   {alg_name:14} | {initial:10.1f} | {final:8.1f} | {improvement:9.1f}")
     
-    print("\n🎯 Density-Specific Learning Analysis:")
+    print("\nDensity-Specific Learning Analysis:")
     for density, probabilities in learned_probabilities_by_density.items():
         prob_values = list(probabilities.values())
         density_type = "sparse" if density < 0.5 else "dense"
@@ -377,17 +347,99 @@ def analyze_results(results: Dict[str, Dict[str, List[float]]],
         print(f"      - Adaptation magnitude: {abs(sparse_avg - dense_avg):.3f}")
         
         if sparse_avg > dense_avg:
-            print(f"      ✅ Correct adaptation: More aggressive on sparse graphs")
+            print(f"      Correct adaptation: More aggressive on sparse graphs")
         elif dense_avg > sparse_avg:
-            print(f"      ❌ Unexpected: More aggressive on dense graphs")
+            print(f"      Unexpected: More aggressive on dense graphs")
         else:
             print(f"      No significant adaptation between densities")
     
-    print("\nExpected Learning Insights:")
-    print("   - Sparse graphs: Should learn higher probabilities (more aggressive)")
-    print("   - Dense graphs: Should learn lower/diverse probabilities (more coordinated)")
-    print("   - Policy diversity within each density shows role specialization")
-    print("   - DSA-RL should outperform fixed DSA using appropriate learned policies")
+
+def plot_probability_evolution(probability_evolution_by_density: Dict[float, Dict[int, List[float]]]) -> None:
+    """Create plots showing probability evolution during learning."""
+    if not PLOTTING_ENABLED:
+        print("Plotting disabled (matplotlib not available)")
+        return
+    
+    print_subsection("Generating Probability Evolution Plots")
+    
+    try:
+        density_keys = sorted(probability_evolution_by_density.keys())
+        
+        for idx, density in enumerate(density_keys):
+            # Create separate figure for each density
+            fig, axes = plt.subplots(2, 1, figsize=(8, 8))
+            evolution_data = probability_evolution_by_density[density]
+
+            if not evolution_data:
+                continue
+
+            # Calculate average, variance, min, max probability over time
+            max_episodes = max(len(agent_probs) for agent_probs in evolution_data.values())
+            avg_probabilities = []
+            var_probabilities = []
+            min_probabilities = []
+            max_probabilities = []
+            
+            for episode in range(max_episodes):
+                episode_probs = []
+                for agent_id, agent_probs in evolution_data.items():
+                    if episode < len(agent_probs):
+                        episode_probs.append(agent_probs[episode])
+                
+                if episode_probs:
+                    avg = sum(episode_probs) / len(episode_probs)
+                    variance = sum((p - avg) ** 2 for p in episode_probs) / len(episode_probs)
+
+                    avg_probabilities.append(avg)
+                    var_probabilities.append(variance)
+                    min_probabilities.append(min(episode_probs))
+                    max_probabilities.append(max(episode_probs))
+            
+            episodes = list(range(len(avg_probabilities)))
+            graph_type = "Sparse" if density < 0.5 else "Dense"
+            
+            # Top subplot: Average probability with variance
+            ax_avg = axes[0]
+            ax_avg.plot(episodes, avg_probabilities, 'b-', linewidth=2, label='Average p')
+
+            # Add variance as secondary y-axis
+            ax_var = ax_avg.twinx()
+            ax_var.plot(episodes, var_probabilities, 'mediumpurple', linewidth=1.5, alpha=0.7, label='Variance')
+            ax_var.set_ylabel('Variance', color='mediumpurple')
+            ax_var.tick_params(axis='y', labelcolor='mediumpurple')
+
+            ax_avg.set_title(f'{graph_type} Graph (k={density})\nAverage Probability & Variance Evolution')
+            ax_avg.set_xlabel('Episodes')
+            ax_avg.set_ylabel('Average Probability', color='blue')
+            ax_avg.tick_params(axis='y', labelcolor='blue')
+            ax_avg.grid(True, alpha=0.3)
+            ax_avg.set_ylim(0, 1)
+
+            # Add legends
+            lines1, labels1 = ax_avg.get_legend_handles_labels()
+            lines2, labels2 = ax_var.get_legend_handles_labels()
+            ax_avg.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+            
+            # Bottom subplot: Min/Max probability range
+            ax_range = axes[1]
+            ax_range.plot(episodes, min_probabilities, 'r-', linewidth=2, label='Minimum p')
+            ax_range.plot(episodes, max_probabilities, 'g-', linewidth=2, label='Maximum p')
+            ax_range.fill_between(episodes, min_probabilities, max_probabilities, alpha=0.2, color='gray')
+            ax_range.set_title(f'{graph_type} Graph (k={density})\nProbability Range Evolution')
+            ax_range.set_xlabel('Episodes')
+            ax_range.set_ylabel('Probability')
+            ax_range.legend()
+            ax_range.grid(True, alpha=0.3)
+            ax_range.set_ylim(0, 1)
+
+            plt.tight_layout()
+            plt.suptitle(f'DSA-RL Probability Evolution - {graph_type} Graph (k={density})', y=1.02, fontsize=16)
+            plt.show()
+
+        print("Probability evolution plots displayed successfully!")
+        
+    except Exception as e:
+        print(f"Could not create probability evolution plots: {e}")
 
 def plot_results(results: Dict[str, Dict[str, List[float]]]) -> None:
     """Create plots showing algorithm convergence."""
@@ -399,7 +451,7 @@ def plot_results(results: Dict[str, Dict[str, List[float]]]) -> None:
 
     try:
         num_densities = len(results)
-        fig, axes = plt.subplots(1, num_densities, figsize=(6*num_densities, 6))
+        fig, axes = plt.subplots(1, num_densities, figsize=(8*num_densities, 6))
         
         if num_densities == 1:
             axes = [axes]
@@ -412,14 +464,14 @@ def plot_results(results: Dict[str, Dict[str, List[float]]]) -> None:
             'DSA_RL_Learned': '#9467bd'  # Purple
         }
         
-        for idx, (density_key, density_results) in enumerate(results.items()):
-            ax = axes[idx]
+        for i, (density_key, density_results) in enumerate(results.items()):
             graph_density = float(density_key.split('_')[1])
+            ax = axes[i]
             
             for alg_name, costs in density_results.items():
                 if costs and alg_name in colors:
                     iterations = list(range(len(costs)))
-                    ax.plot(iterations, costs, color=colors[alg_name], 
+                    ax.plot(iterations, costs, color=colors[alg_name],
                            label=alg_name.replace('_', ' '), linewidth=2)
             
             graph_type = "Sparse" if graph_density < 0.5 else "Dense"
@@ -428,11 +480,10 @@ def plot_results(results: Dict[str, Dict[str, List[float]]]) -> None:
             ax.set_ylabel('Global Cost')
             ax.legend()
             ax.grid(True, alpha=0.3)
-        
+
         plt.tight_layout()
-        plt.suptitle('DCOP Algorithm Performance Comparison', y=1.02, fontsize=16)
         plt.show()
-        
+
         print("Performance plots displayed successfully!")
         
     except Exception as e:
@@ -444,7 +495,7 @@ def main():
     """
     print_section_header("DCOP Algorithm Learning and Comparison", "=")
     
-    print("🎯 Objective: Compare DSA, MGM, and learning-enhanced DSA-RL")
+    print("Objective: Compare DSA, MGM, and learning-enhanced DSA-RL")
     print("Method: optimize policies, then fair comparison on identical problems")
     print("Focus: Graph coloring with distributed constraint optimization")
     
@@ -461,7 +512,7 @@ def main():
         
         # Phase 2: Learning Phase  
         print_section_header("Phase 2: DSA-RL Learning Phase")
-        learned_probabilities_by_density = run_learning_phase(shared_topology, config)
+        learned_probabilities_by_density, probability_evolution_by_density = run_learning_phase(shared_topology, config)
         
         # Phase 3: Comparison Phase
         print_section_header("Phase 3: Algorithm Comparison Phase")
@@ -474,6 +525,7 @@ def main():
         # Optional: Plotting
         if PLOTTING_ENABLED:
             plot_results(results)
+            plot_probability_evolution(probability_evolution_by_density)
         
         # Summary
         total_time = time.time() - start_time
@@ -485,16 +537,16 @@ def main():
         print(f"Fair comparison completed across {config['repetitions']} repetitions")
         
         print("\nKey Findings:")
-        print("   ✅ Graph structure maintained consistently across all phases")
-        print("   ✅ DSA-RL learned density-specific p policies")
-        print("   ✅ Fair comparison uses appropriate learned policies per density")
-        print("   ✅ Learning-enhanced agents adapt to different graph structures")
+        print("   Graph structure maintained consistently across all phases")
+        print("   DSA-RL learned density-specific p policies")
+        print("   Fair comparison uses appropriate learned policies per density")
+        print("   Learning-enhanced agents adapt to different graph structures")
         
     except KeyboardInterrupt:
         print("\nExperiment interrupted by user")
         
     except Exception as e:
-        print(f"\n❌ Error during experiment: {e}")
+        print(f"\nError during experiment: {e}")
         import traceback
         traceback.print_exc()
 

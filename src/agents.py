@@ -1,12 +1,4 @@
-"""
-DCOP Agent Implementations
-
-This module contains all agent implementations for different DCOP algorithms:
-- Standard DSA agents
-- Reinforcement Learning agents (DSA-RL)
-- MGM agents
-- Agents using learned policies
-"""
+"""DCOP Agent Implementations"""
 
 import math
 import random
@@ -26,21 +18,9 @@ from .utils import sigmoid
 # =============================================================================
 
 class Agent(ABC):
-    """
-    Abstract base class for all DCOP agents.
-    
-    Provides common functionality for variable management, message passing,
-    and constraint handling that all agent types can build upon.
-    """
+    """Abstract base class for all DCOP agents."""
     
     def __init__(self, agent_id: int, domain_size: int):
-        """
-        Initialize base agent.
-        
-        Args:
-            agent_id: Unique identifier for this agent
-            domain_size: Size of the agent's variable domain
-        """
         # Agent identification and timing
         self.id_ = agent_id
         self.global_clock = 0
@@ -62,31 +42,12 @@ class Agent(ABC):
         self.p = None
 
     def set_neighbors(self, constraint_relations: List) -> None:
-        """
-        Set up neighbor relationships and constraint tables.
-        
-        Args:
-            constraint_relations: List of ConstraintRelation objects involving this agent
-        """
         for relation in constraint_relations:
             other_agent = relation.get_other_agent(self)
             self.neighbor_agent_ids.append(other_agent)
             self.constraint_tables[other_agent] = relation.cost_table
-        
-        # Backward compatibility
-        # self.neighbors_agents_id = self.neighbor_agent_ids
-        # self.constraints = self.constraint_tables
-    
+
     def calculate_local_cost(self, messages: List[Msg]) -> float:
-        """
-        Calculate local constraint cost based on received messages.
-        
-        Args:
-            messages: Messages from neighboring agents
-            
-        Returns:
-            Total local constraint cost
-        """
         total_cost = 0.0
         
         for msg in messages:
@@ -107,15 +68,6 @@ class Agent(ABC):
         return total_cost
 
     def find_best_assignment(self, messages: List[Msg]) -> Tuple[int, float]:
-        """
-        Find the variable assignment that minimizes local cost.
-        
-        Args:
-            messages: Messages from neighboring agents
-            
-        Returns:
-            Tuple of (best_variable, minimum_cost)
-        """
         current_cost = self.calculate_local_cost(messages)
         best_variable = self.variable
         min_cost = current_cost
@@ -138,16 +90,9 @@ class Agent(ABC):
         return best_variable, min_cost
     
     def initialize(self) -> None:
-        """Initialize agent by sending initial messages."""
         self.send_messages()
     
     def execute_iteration(self, global_clock: int) -> None:
-        """
-        Execute one iteration of the agent's algorithm.
-        
-        Args:
-            global_clock: Current global time step
-        """
         self.global_clock = global_clock
         messages = self.inbox.extract()
         
@@ -158,18 +103,10 @@ class Agent(ABC):
 
     @abstractmethod
     def compute(self, messages: List[Msg]) -> None:
-        """
-        Compute new variable assignment based on received messages.
-        Must be implemented by subclasses.
-        """
         pass
     
     @abstractmethod
     def send_messages(self) -> None:
-        """
-        Send messages to neighboring agents.
-        Must be implemented by subclasses.
-        """
         pass
 
 
@@ -178,26 +115,13 @@ class Agent(ABC):
 # =============================================================================
 
 class DSAAgent(Agent):
-    """
-    Standard DSA (Distributed Stochastic Algorithm) agent.
-    
-    Makes stochastic decisions to change variables based on a fixed p.
-    """
+    """Standard DSA agent with fixed probability p."""
     
     def __init__(self, agent_id: int, domain_size: int, p: float):
-        """
-        Initialize DSA agent.
-        
-        Args:
-            agent_id: Unique identifier for this agent
-            domain_size: Size of the agent's variable domain
-            p: Probability of changing variable when improvement is possible
-        """
         super().__init__(agent_id, domain_size)
         self.p = p
 
     def compute(self, messages: List[Msg]) -> None:
-        """Compute DSA decision with fixed p."""
         current_cost = self.calculate_local_cost(messages)
         best_variable, min_cost = self.find_best_assignment(messages)
         
@@ -207,7 +131,6 @@ class DSAAgent(Agent):
                 self.variable = best_variable
     
     def send_messages(self) -> None:
-        """Send current variable value to all neighbors."""
         for neighbor_id in self.neighbor_agent_ids:
             message = Msg(self.id_, neighbor_id, self.variable)
             self.outbox.insert([message])
@@ -217,11 +140,7 @@ class DSAAgent(Agent):
 # =============================================================================
 
 class ReinforcementLearningAgent(Agent):
-    """
-    DSA agent with REINFORCE learning.
-
-    Learns p policies through reinforcement learning using local features and global context.
-    """
+    """DSA agent with REINFORCE learning."""
 
     def __init__(
         self,
@@ -232,17 +151,6 @@ class ReinforcementLearningAgent(Agent):
         baseline_decay: float = 0.9,
         gamma: float = 0.99
     ):
-        """
-        Initialize reinforcement learning agent.
-
-        Args:
-            agent_id: Unique identifier for this agent
-            domain_size: Size of the agent's variable domain
-            initial_probability: Initial p value
-            learning_rate: Learning rate for policy updates
-            baseline_decay: Decay factor for baseline updates
-            gamma: Discount for future reward
-        """
         super().__init__(agent_id, domain_size)
 
         self.avg_cost_per_agent = None
@@ -264,7 +172,6 @@ class ReinforcementLearningAgent(Agent):
         self.theta = math.log(initial_probability / (1 - initial_probability))
 
     def compute(self, messages: List[Msg]) -> None:
-        """Compute decision with reinforcement learning."""
         # Calculate local cost and store it
         current_cost = self.calculate_local_cost(messages)
         self.recent_local_costs.append(current_cost)
@@ -311,7 +218,6 @@ class ReinforcementLearningAgent(Agent):
 
 
     def finish_episode(self) -> None:
-        """Update policy weights using episode-level REINFORCE with enhanced variance reduction."""
         # Compute raw advantage relative to baseline
         episode_reward = self.compute_gt()
         if len(episode_reward) == 0:
@@ -357,27 +263,14 @@ class ReinforcementLearningAgent(Agent):
 # =============================================================================
 
 class MGMAgent(Agent):
-    """
-    MGM (Maximum Gain Messages) algorithm agent.
-    
-    Uses a two-phase approach: calculate maximum gain, then coordinate
-    with neighbors to avoid conflicts when multiple agents want to change.
-    """
+    """MGM (Maximum Gain Messages) algorithm agent."""
     
     def __init__(self, agent_id: int, domain_size: int):
-        """
-        Initialize MGM agent.
-        
-        Args:
-            agent_id: Unique identifier for this agent
-            domain_size: Size of the agent's variable domain
-        """
         super().__init__(agent_id, domain_size)
         self.local_reduction = 0.0  # Maximum possible cost reduction
         self.potential_variable = self.variable  # Variable that achieves max reduction
     
     def compute(self, messages: List[Msg]) -> None:
-        """Compute MGM decision using two-phase protocol."""
         if self.global_clock % 2 == 1:
             # Odd iterations: Calculate maximum local reduction
             self._calculate_maximum_reduction(messages)
@@ -386,7 +279,6 @@ class MGMAgent(Agent):
             self._coordinate_change_decision(messages)
     
     def _calculate_maximum_reduction(self, messages: List[Msg]) -> None:
-        """Calculate maximum possible cost reduction."""
         current_cost = self.calculate_local_cost(messages)
         best_variable, min_cost = self.find_best_assignment(messages)
         
@@ -397,7 +289,6 @@ class MGMAgent(Agent):
             self.local_reduction = 0.0
 
     def _coordinate_change_decision(self, messages: List[Msg]) -> None:
-        """Coordinate with neighbors to decide if this agent should change."""
         should_change = True
         
         for msg in messages:
@@ -421,7 +312,6 @@ class MGMAgent(Agent):
             self.local_reduction = 0.0
 
     def send_messages(self) -> None:
-        """Send messages based on current phase."""
         if self.global_clock % 2 == 0:
             # Even iterations: Send current variable
             for neighbor_id in self.neighbor_agent_ids:
